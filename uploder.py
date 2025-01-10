@@ -23,6 +23,7 @@ from pyrogram.enums import ParseMode
 
 import yt_dlp
 import aiohttp
+import aiofiles
 
 # Import config variables directly
 from config import (
@@ -294,9 +295,9 @@ async def async_download_file(url, filename, progress=None, progress_args=None):
             total_size = int(response.headers.get('content-length', 0))
             downloaded_size = 0
             
-            with open(file_path, "wb") as file:
+            async with aiofiles.open(file_path, mode='wb') as f:
                 async for chunk in response.content.iter_chunked(1024):
-                    file.write(chunk)
+                    await f.write(chunk)
                     downloaded_size += len(chunk)
                     
                     # Call progress callback if provided
@@ -402,9 +403,9 @@ async def handle_download_or_upload(
             if "youtube.com" in url or "youtu.be" in url:
                 # YouTube download
                 downloaded_file = await download_youtube(
+                    client, 
+                    message, 
                     url, 
-                    progress_msg, 
-                    start_time, 
                     filename
                 )
             else:
@@ -499,7 +500,7 @@ async def handle_download_or_upload(
             if hasattr(progress_msg, 'edit_text'):
                 await progress_msg.edit_text(f"❌ **Download Failed**: {str(download_error)}")
             else:
-                await message.reply_text(f"❌ **Download Failed**: {str(download_error)}")
+                await progress_msg.reply_text(f"❌ **Download Failed**: {str(download_error)}")
             return None
     
     except Exception as e:
@@ -554,10 +555,10 @@ async def download_file(
                         file_size = int(response.headers.get('Content-Length', 0))
                     
                     # Open file for writing using standard file operations
-                    with open(file_path, 'wb') as f:
+                    async with aiofiles.open(file_path, mode='wb') as f:
                         downloaded = 0
                         async for chunk in response.content.iter_chunked(64 * 1024):  # 64KB chunks
-                            f.write(chunk)
+                            await f.write(chunk)
                             downloaded += len(chunk)
                             
                             # Update progress
@@ -695,23 +696,34 @@ def humanbytes(size_in_bytes):
     return f"{s} {size_name[i]}"
 
 async def download_youtube(
+    client, 
+    message, 
     url, 
-    progress_msg, 
-    start_time, 
-    filename
+    filename=None
 ):
     """
     Download YouTube video or audio with enhanced error handling
     
+    :param client: Pyrogram client
+    :param message: Original message
     :param url: YouTube URL
-    :param progress_msg: Message to update progress
-    :param start_time: Start time of download
-    :param filename: Desired filename
+    :param filename: Desired filename (optional)
     :return: Path to downloaded file or None
     """
     try:
         # Ensure downloads directory exists
         os.makedirs('downloads', exist_ok=True)
+        
+        # Generate filename if not provided
+        if not filename:
+            filename = str(uuid.uuid4())
+        
+        # Sanitize filename
+        filename = re.sub(r'[^\w\-_\. ]', '_', filename)
+        
+        # Ensure filename has an extension
+        if '.' not in filename:
+            filename += '.mp4'  # Default to mp4
         
         # Prepare yt-dlp options
         ydl_opts = {
@@ -743,9 +755,9 @@ async def download_youtube(
                             )
                             
                             # Attempt to update message, with fallback methods
-                            if hasattr(progress_msg, 'edit_text'):
+                            if hasattr(message, 'edit_text'):
                                 asyncio.create_task(
-                                    safe_edit_message(progress_msg, status_message)
+                                    safe_edit_message(message, status_message)
                                 )
                         except Exception as edit_error:
                             logging.warning(f"Progress update error: {edit_error}")
@@ -763,10 +775,10 @@ async def download_youtube(
                 
                 if not info_dict:
                     # Update error message
-                    if hasattr(progress_msg, 'edit_text'):
-                        await progress_msg.edit_text("❌ **YouTube Download Failed**: Unable to extract video info")
+                    if hasattr(message, 'edit_text'):
+                        await message.edit_text("❌ **YouTube Download Failed**: Unable to extract video info")
                     else:
-                        await progress_msg.reply_text("❌ **YouTube Download Failed**: Unable to extract video info")
+                        await message.reply_text("❌ **YouTube Download Failed**: Unable to extract video info")
                     return None
                 
                 # Get the actual downloaded file path
@@ -775,20 +787,20 @@ async def download_youtube(
                 # Validate downloaded files
                 if not downloaded_files:
                     # Update error message
-                    if hasattr(progress_msg, 'edit_text'):
-                        await progress_msg.edit_text("❌ **YouTube Download Failed**: No files downloaded")
+                    if hasattr(message, 'edit_text'):
+                        await message.edit_text("❌ **YouTube Download Failed**: No files downloaded")
                     else:
-                        await progress_msg.reply_text("❌ **YouTube Download Failed**: No files downloaded")
+                        await message.reply_text("❌ **YouTube Download Failed**: No files downloaded")
                     return None
                 
                 # Return the first downloaded file
                 downloaded_file = downloaded_files[0]
                 
                 # Final success message
-                if hasattr(progress_msg, 'edit_text'):
-                    await progress_msg.edit_text(f"✅ **Download Complete**: `{os.path.basename(downloaded_file)}`")
+                if hasattr(message, 'edit_text'):
+                    await message.edit_text(f"✅ **Download Complete**: `{os.path.basename(downloaded_file)}`")
                 else:
-                    await progress_msg.reply_text(f"✅ **Download Complete**: `{os.path.basename(downloaded_file)}`")
+                    await message.reply_text(f"✅ **Download Complete**: `{os.path.basename(downloaded_file)}`")
                 
                 return downloaded_file
         
@@ -808,10 +820,10 @@ async def download_youtube(
             
             # Update error message
             try:
-                if hasattr(progress_msg, 'edit_text'):
-                    await progress_msg.edit_text(error_text)
+                if hasattr(message, 'edit_text'):
+                    await message.edit_text(error_text)
                 else:
-                    await progress_msg.reply_text(error_text)
+                    await message.reply_text(error_text)
             except Exception as msg_error:
                 logging.error(f"Error sending message: {msg_error}")
             
@@ -822,10 +834,10 @@ async def download_youtube(
         
         # Final fallback error message
         try:
-            if hasattr(progress_msg, 'edit_text'):
-                await progress_msg.edit_text(f"❌ **Download Failed**: {str(general_error)}")
+            if hasattr(message, 'edit_text'):
+                await message.edit_text(f"❌ **Download Failed**: {str(general_error)}")
             else:
-                await progress_msg.reply_text(f"❌ **Download Failed**: {str(general_error)}")
+                await message.reply_text(f"❌ **Download Failed**: {str(general_error)}")
         except:
             pass
         
@@ -1316,7 +1328,12 @@ async def handle_message(client, message):
             
             rename_info = pending_renames.pop(chat_id)
             if rename_info.get("type") == "youtube":
-                await download_youtube(client, message, rename_info["url"], text)
+                await download_youtube(
+                    client, 
+                    message, 
+                    rename_info["url"], 
+                    filename=text
+                )
             else:
                 await handle_download_or_upload(
                     client, 
@@ -1332,7 +1349,12 @@ async def handle_message(client, message):
         
         # YouTube download
         if re.match(YOUTUBE_REGEX, text):
-            await download_youtube(client, message, text)
+            await download_youtube(
+                client, 
+                message, 
+                text, 
+                filename=text
+            )
             return
         
         # Direct download URL
@@ -1559,3 +1581,193 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+# High-Performance Download and Upload Engine
+class FastDownloadEngine:
+    def __init__(self, max_workers=10, chunk_size=1024*1024):
+        """
+        Initialize high-performance download engine
+        
+        :param max_workers: Maximum concurrent download workers
+        :param chunk_size: Size of download chunks
+        """
+        self.executor = ThreadPoolExecutor(max_workers=max_workers)
+        self.chunk_size = chunk_size
+        self.logger = logging.getLogger('FastDownloadEngine')
+    
+    async def download_file(
+        self, 
+        url, 
+        filename=None, 
+        progress_callback=None,
+        timeout=300
+    ):
+        """
+        High-performance asynchronous file download
+        
+        :param url: URL to download from
+        :param filename: Optional filename
+        :param progress_callback: Optional progress tracking function
+        :param timeout: Download timeout in seconds
+        :return: Path to downloaded file
+        """
+        try:
+            # Ensure downloads directory exists
+            os.makedirs('downloads', exist_ok=True)
+            
+            # Generate filename if not provided
+            if not filename:
+                filename = f"{uuid.uuid4()}"
+            
+            # Sanitize filename
+            filename = re.sub(r'[^\w\-_\. ]', '_', filename)
+            if '.' not in filename:
+                filename += '.bin'
+            
+            # Full file path
+            file_path = os.path.join('downloads', filename)
+            
+            # Async download with aiohttp
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, timeout=aiohttp.ClientTimeout(total=timeout)) as response:
+                    # Validate response
+                    if response.status not in [200, 206]:
+                        raise ValueError(f"Invalid HTTP status: {response.status}")
+                    
+                    # Get total file size
+                    total_size = int(response.headers.get('Content-Length', 0))
+                    downloaded = 0
+                    
+                    # Open file for writing
+                    async with aiofiles.open(file_path, mode='wb') as f:
+                        async for chunk in response.content.iter_chunked(self.chunk_size):
+                            await f.write(chunk)
+                            downloaded += len(chunk)
+                            
+                            # Progress tracking
+                            if progress_callback and total_size > 0:
+                                progress = (downloaded / total_size) * 100
+                                await progress_callback(progress, downloaded, total_size)
+                    
+                    return file_path
+        
+        except Exception as e:
+            self.logger.error(f"Download error: {e}")
+            raise
+    
+    async def upload_file(
+        self, 
+        client, 
+        chat_id, 
+        file_path, 
+        progress_callback=None
+    ):
+        """
+        High-performance file upload
+        
+        :param client: Telegram client
+        :param chat_id: Destination chat ID
+        :param file_path: Path to file to upload
+        :param progress_callback: Optional progress tracking function
+        :return: Uploaded file details
+        """
+        try:
+            # Determine file type
+            file_extension = os.path.splitext(file_path)[1].lower()
+            
+            # Upload based on file type
+            if file_extension in ['.mp4', '.avi', '.mkv', '.mov', '.webm']:
+                uploaded_file = await client.send_video(
+                    chat_id=chat_id,
+                    video=file_path,
+                    progress=progress_callback
+                )
+            elif file_extension in ['.mp3', '.wav', '.flac', '.ogg']:
+                uploaded_file = await client.send_audio(
+                    chat_id=chat_id,
+                    audio=file_path,
+                    progress=progress_callback
+                )
+            else:
+                uploaded_file = await client.send_document(
+                    chat_id=chat_id,
+                    document=file_path,
+                    progress=progress_callback
+                )
+            
+            return uploaded_file
+        
+        except Exception as e:
+            self.logger.error(f"Upload error: {e}")
+            raise
+    
+    async def download_youtube(
+        self, 
+        url, 
+        filename=None, 
+        progress_callback=None
+    ):
+        """
+        High-performance YouTube download
+        
+        :param url: YouTube URL
+        :param filename: Optional filename
+        :param progress_callback: Optional progress tracking function
+        :return: Path to downloaded file
+        """
+        try:
+            # Ensure downloads directory exists
+            os.makedirs('downloads', exist_ok=True)
+            
+            # Generate filename if not provided
+            if not filename:
+                filename = str(uuid.uuid4())
+            
+            # Sanitize filename
+            filename = re.sub(r'[^\w\-_\. ]', '_', filename)
+            if '.' not in filename:
+                filename += '.mp4'
+            
+            # Prepare yt-dlp options
+            ydl_opts = {
+                'outtmpl': os.path.join('downloads', filename),
+                'nooverwrites': True,
+                'no_color': True,
+                'progress_hooks': [],
+                'quiet': True,
+                'no_warnings': True,
+                'ignoreerrors': False,
+                'noplaylist': True,
+            }
+            
+            # Progress tracking hook
+            def progress_hook(d):
+                if d['status'] == 'downloading' and progress_callback:
+                    downloaded_bytes = d.get('downloaded_bytes', 0)
+                    total_bytes = d.get('total_bytes_estimate', 0)
+                    
+                    if total_bytes > 0:
+                        progress = (downloaded_bytes / total_bytes) * 100
+                        asyncio.create_task(progress_callback(progress, downloaded_bytes, total_bytes))
+            
+            # Add progress hook
+            ydl_opts['progress_hooks'].append(progress_hook)
+            
+            # Download with yt-dlp
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info_dict = ydl.extract_info(url, download=True)
+                
+                # Get downloaded files
+                downloaded_files = ydl.get_download_path(info_dict)
+                
+                if not downloaded_files:
+                    raise ValueError("No files downloaded")
+                
+                return downloaded_files[0]
+        
+        except Exception as e:
+            self.logger.error(f"YouTube download error: {e}")
+            raise
+
+# Global download engine
+download_engine = FastDownloadEngine()

@@ -1,1 +1,1 @@
-worker: python3 uploder.py
+worker: python3 -m uploder

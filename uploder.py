@@ -7,8 +7,7 @@ import asyncio
 import math
 
 from pyrogram import Client, filters
-from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message
-from pyrogram.enums import ParseMode
+from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from pyrogram.errors import FloodWait
 
 import yt_dlp
@@ -315,91 +314,205 @@ async def async_download_file(url, filename, progress=None, progress_args=None):
     
     return file_path
 
-async def send_file_with_thumbnail(client, chat_id, document, file_name, caption, progress, progress_args):
-    """Send file with user's thumbnail if available"""
-    thumb = get_thumb(chat_id)
-    start_time = time.time()
+async def send_file_with_thumbnail(client, chat_id, document, file_name, caption, progress=None, progress_args=None):
+    """
+    Send file with user's thumbnail if available
     
+    :param client: Pyrogram client
+    :param chat_id: Destination chat ID
+    :param document: Path to the document
+    :param file_name: Name of the file
+    :param caption: Caption for the file
+    :param progress: Optional progress callback function
+    :param progress_args: Optional arguments for progress callback
+    :return: Sent message
+    """
     try:
-        # Delete the progress message from download
-        try:
-            await progress_args[0].delete()
-        except Exception:
-            pass
+        # Try to get user's custom thumbnail
+        thumb = await get_thumb(chat_id)
         
-        # Send new progress message for upload
-        progress_message = await client.send_message(chat_id, "**🔄 Preparing Upload...**")
+        # Send the file
+        sent_message = await client.send_document(
+            chat_id=chat_id,
+            document=document,
+            file_name=file_name,
+            caption=caption,
+            thumb=thumb,
+            progress=progress,
+            progress_args=progress_args
+        )
         
-        try:
-            # Use user client for large files
-            file_size = os.path.getsize(document)
-            
-            await client.send_document(
-                chat_id=chat_id,
-                document=document,
-                thumb=thumb,
-                file_name=file_name,
-                caption=caption,
-                progress=progress,
-                progress_args=(
-                    "📤 Uploading",
-                    progress_message,
-                    start_time
-                ),
-                force_document=True
-            )
-            # Delete progress message after upload
-            await progress_message.delete()
-        except Exception as e:
-            # If sending fails, show error
-            error_msg = str(e)
-            await progress_message.edit(f"**❌ Upload Failed!**\n\n`{error_msg}`")
-            raise e
-            
+        return sent_message
+    
     except Exception as e:
+        logging.error(f"Error sending file: {str(e)}")
+        raise
+
+async def handle_download_or_upload(client, message, url, filename=None, download_type="direct"):
+    """
+    Unified handler for downloading and uploading files
+    
+    :param client: Pyrogram client
+    :param message: Original message
+    :param url: URL to download from
+    :param filename: Optional custom filename
+    :param download_type: Type of download (direct/youtube)
+    """
+    try:
+        # Initial progress message
+        progress_msg = await message.reply_text(
+            "⏳ **Initializing Download...**\n\n"
+            "• Please wait while I process your request\n"
+            "• You'll see progress updates here"
+        )
+        
+        start_time = time.time()
+        
+        # Determine filename if not provided
+        if not filename:
+            filename = await get_filename(url) or "file"
+        
+        # Get file size
+        file_size = await get_file_size(url)
+        
+        # Update status with file info
+        await progress_msg.edit_text(
+            f"📥 **Starting Download...**\n\n"
+            f"**File:** `{filename}`\n"
+            f"**Size:** {humanbytes(file_size)}\n\n"
+            "**Status:** Downloading..."
+        )
+        
+        # Download file
+        file_path = await async_download_file(
+            url=url,
+            filename=filename,
+            progress=progress_for_pyrogram,
+            progress_args=(progress_msg, start_time)
+        )
+        
+        # Upload file
+        sent_file = await send_file_with_thumbnail(
+            client=client,
+            chat_id=message.chat.id,
+            document=file_path,
+            file_name=filename,
+            caption=f"📤 **Upload Complete!**\n\n**Filename:** `{filename}`",
+            progress=progress_for_pyrogram,
+            progress_args=(progress_msg, start_time)
+        )
+        
+        # Delete progress message
         try:
-            error_msg = str(e)
-            await progress_message.edit(f"**❌ Upload Failed!**\n\n`{error_msg}`")
-        except Exception:
-            pass
-        raise e
+            await progress_msg.delete()
+        except Exception as e:
+            logging.error(f"Error deleting progress message: {str(e)}")
+        
+        # Cleanup downloaded file
+        try:
+            os.remove(file_path)
+        except Exception as e:
+            logging.error(f"Error removing file: {str(e)}")
+        
+        return sent_file
+    
+    except Exception as e:
+        # Handle and log any errors during download/upload
+        error_msg = str(e)
+        try:
+            await progress_msg.edit_text(f"❌ **Process Failed!**\n\n`{error_msg}`")
+        except:
+            await message.reply_text(f"❌ **Process Failed!**\n\n`{error_msg}`")
+        
+        logging.error(f"Download/Upload Error: {error_msg}")
+        return None
 
-# Create required directories
-os.makedirs(DOWNLOAD_LOCATION, exist_ok=True)
-
-# Progress callback function
-async def progress_for_pyrogram(current, total, ud_type, message, start):
+def progress_for_pyrogram(current, total, ud_type, message, start):
+    """
+    Custom progress callback for file uploads and downloads
+    
+    :param current: Current progress
+    :param total: Total file size
+    :param ud_type: Upload/Download type
+    :param message: Telegram message to update
+    :param start: Start time of the operation
+    """
     now = time.time()
     diff = now - start
     
+    if current == total:
+        # Operation completed
+        return
+    
     if round(diff % 10.00) == 0 or current == total:
+        # Calculate progress percentage
         percentage = current * 100 / total
-        speed = current / diff
-        elapsed_time = round(diff) * 1000
-        time_to_completion = round((total - current) / speed) * 1000
-        estimated_total_time = elapsed_time + time_to_completion
-
-        elapsed_time = TimeFormatter(milliseconds=elapsed_time)
-        estimated_total_time = TimeFormatter(milliseconds=estimated_total_time)
-
-        progress = "[{0}{1}] \nP: {2}%\n".format(
-            ''.join(["█" for _ in range(math.floor(percentage / 5))]),
-            ''.join(["░" for _ in range(20 - math.floor(percentage / 5))]),
-            round(percentage, 2))
-
-        tmp = progress + "{0} of {1}\nSpeed: {2}/s\nETA: {3}\n".format(
-            humanbytes(current),
-            humanbytes(total),
-            humanbytes(speed),
-            estimated_total_time if estimated_total_time != '' else "0 s"
+        
+        # Calculate speed
+        speed = current / diff if diff > 0 else 0
+        speed_str = humanbytes(speed) + "/s"
+        
+        # Calculate ETA
+        eta = int((total - current) / speed) if speed > 0 else 0
+        eta_str = TimeFormatter(eta * 1000)
+        
+        # Create progress bar
+        progress_bar_length = 15
+        filled_length = int(progress_bar_length * current // total)
+        progress_bar = '█' * filled_length + '░' * (progress_bar_length - filled_length)
+        
+        # Prepare status message
+        status_msg = (
+            f"**{ud_type.capitalize()}ing File**\n\n"
+            f"📊 Progress: `{progress_bar}` {percentage:.1f}%\n"
+            f"📥 Downloaded: `{humanbytes(current)}` of `{humanbytes(total)}`\n"
+            f"🚀 Speed: `{speed_str}`\n"
+            f"⏱️ ETA: `{eta_str}`"
         )
+        
         try:
-            await message.edit(
-                text=f"{ud_type}\n {tmp}",
-                parse_mode=ParseMode.MARKDOWN
-            )
-        except Exception:
-            pass
+            # Update message every 10 seconds or when complete
+            if current != total:
+                # Edit message with progress
+                message.edit_text(status_msg)
+            else:
+                # When download/upload is complete
+                message.edit_text(
+                    f"**✅ {ud_type.capitalize()} Complete!**\n"
+                    f"📦 Total Size: `{humanbytes(total)}`\n"
+                    f"⏱️ Time Taken: `{TimeFormatter((now - start) * 1000)}`"
+                )
+        except FloodWait as e:
+            # Handle Telegram's flood wait
+            asyncio.sleep(e.x)
+        except Exception as e:
+            # Log any other exceptions
+            logging.error(f"Progress update error: {str(e)}")
+
+def TimeFormatter(milliseconds: int) -> str:
+    """
+    Convert milliseconds to human-readable time format
+    
+    :param milliseconds: Time in milliseconds
+    :return: Formatted time string
+    """
+    seconds, milliseconds = divmod(int(milliseconds), 1000)
+    minutes, seconds = divmod(seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    days, hours = divmod(hours, 24)
+    
+    # Format the time components
+    time_str = []
+    if days > 0:
+        time_str.append(f"{days}d")
+    if hours > 0:
+        time_str.append(f"{hours}h")
+    if minutes > 0:
+        time_str.append(f"{minutes}m")
+    if seconds > 0:
+        time_str.append(f"{seconds}s")
+    
+    return " ".join(time_str) if time_str else "0s"
 
 def humanbytes(size):
     if not size:
@@ -412,36 +525,6 @@ def humanbytes(size):
         n += 1
     return str(round(size, 2)) + " " + Dic_powerN[n] + 'B'
 
-def TimeFormatter(milliseconds: int) -> str:
-    seconds, milliseconds = divmod(int(milliseconds), 1000)
-    minutes, seconds = divmod(seconds, 60)
-    hours, minutes = divmod(minutes, 60)
-    days, hours = divmod(hours, 24)
-    tmp = ((str(days) + "d, ") if days else "") + \
-        ((str(hours) + "h, ") if hours else "") + \
-        ((str(minutes) + "m, ") if minutes else "") + \
-        ((str(seconds) + "s, ") if seconds else "") + \
-        ((str(milliseconds) + "ms, ") if milliseconds else "")
-    return tmp[:-2]
-
-async def check_user_premium(user_id: int) -> bool:
-    """Always return False for free option only"""
-    return False
-
-async def get_user_info(user_id: int):
-    """
-    Retrieve user information
-    
-    :param user_id: Telegram user ID
-    :return: Tuple of (status, storage, features)
-    """
-    # Default free tier settings
-    status = "🟢 Free Tier"
-    storage = "500 MB / 2 GB"
-    features = "Basic Upload & Download"
-    
-    return status, storage, features
-
 # Initialize bot with proper settings
 bot = Client(
     "uploader_bot", 
@@ -449,7 +532,7 @@ bot = Client(
     api_hash=API_HASH,
     bot_token=BOT_TOKEN,
     workers=2,  # Reduced workers to prevent overload
-    parse_mode=ParseMode.MARKDOWN
+    parse_mode="Markdown"
 )
 
 # Initialize user client for large files
@@ -478,7 +561,7 @@ async def help_command(client, message: Message):
     # Create keyboard for help
     keyboard = InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("🏠 Back to Start", callback_data="start")
+            InlineKeyboardButton("🏠 Back to Start", callback_data="s")
         ]
     ])
     
@@ -507,7 +590,7 @@ async def about_command(client, message: Message):
     # Create keyboard for about
     keyboard = InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("🏠 Back to Start", callback_data="start")
+            InlineKeyboardButton("🏠 Back to Start", callback_data="s")
         ]
     ])
     
@@ -537,11 +620,11 @@ async def start_command(client, message: Message):
     
     keyboard = InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("⚙️ Settings", callback_data="settings"),
-            InlineKeyboardButton("❓ Help", callback_data="help")
+            InlineKeyboardButton("⚙️ Settings", callback_data="set"),
+            InlineKeyboardButton("❓ Help", callback_data="h")
         ],
         [
-            InlineKeyboardButton("🤖 About", callback_data="about")
+            InlineKeyboardButton("🤖 About", callback_data="a")
         ],
         [
             InlineKeyboardButton("💫 Support", url="https://t.me/your_support")
@@ -569,23 +652,28 @@ async def callback_handler(client, callback_query):
         message = callback_query.message
         chat_id = message.chat.id
         
+        # Validate callback data length
+        if len(data) > 64:  # Telegram has a limit on callback data length
+            await callback_query.answer("❌ Button data is too long.", show_alert=True)
+            return
+        
         # First answer the callback query to stop loading animation
         await callback_query.answer(
             "Processing your request...",
             show_alert=False
         )
         
-        # Add handlers for start, help, about, and settings buttons
-        if data == "start":
+        # Simplified callback data handling
+        if data == "s":  # Start
             status, storage, features = await get_user_info(callback_query.from_user.id)
             
             keyboard = InlineKeyboardMarkup([
                 [
-                    InlineKeyboardButton("⚙️ Settings", callback_data="settings"),
-                    InlineKeyboardButton("❓ Help", callback_data="help")
+                    InlineKeyboardButton("⚙️ Settings", callback_data="set"),
+                    InlineKeyboardButton("❓ Help", callback_data="h")
                 ],
                 [
-                    InlineKeyboardButton("🤖 About", callback_data="about")
+                    InlineKeyboardButton("🤖 About", callback_data="a")
                 ],
                 [
                     InlineKeyboardButton("💫 Support", url="https://t.me/your_support")
@@ -604,10 +692,10 @@ async def callback_handler(client, callback_query):
             )
             return
         
-        elif data == "help":
+        elif data == "h":  # Help
             keyboard = InlineKeyboardMarkup([
                 [
-                    InlineKeyboardButton("🏠 Back to Start", callback_data="start")
+                    InlineKeyboardButton("🏠 Back to Start", callback_data="s")
                 ]
             ])
             
@@ -618,10 +706,10 @@ async def callback_handler(client, callback_query):
             )
             return
         
-        elif data == "about":
+        elif data == "a":  # About
             keyboard = InlineKeyboardMarkup([
                 [
-                    InlineKeyboardButton("🏠 Back to Start", callback_data="start")
+                    InlineKeyboardButton("🏠 Back to Start", callback_data="s")
                 ]
             ])
             
@@ -632,18 +720,18 @@ async def callback_handler(client, callback_query):
             )
             return
         
-        elif data == "settings":
+        elif data == "set":  # Settings
             # Add settings logic here if needed
             await message.edit_text(
                 "**⚙️ Settings**\n\nNo settings configured yet.",
                 reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🏠 Back to Start", callback_data="start")]
+                    [InlineKeyboardButton("🏠 Back to Start", callback_data="s")]
                 ])
             )
             return
         
-        # Existing callback handlers remain the same
-        if data == "cancel":
+        # Existing callback handlers for download and rename
+        if data.startswith("cancel"):
             try:
                 await message.edit_text("❌ **Process Cancelled**")
             except:
@@ -651,6 +739,7 @@ async def callback_handler(client, callback_query):
             return
             
         elif data.startswith(("default|", "rename|")):
+            # Existing download and rename logic remains the same
             file_id = data.split("|")[1]
             url = pending_downloads.get(file_id)
             
@@ -662,68 +751,15 @@ async def callback_handler(client, callback_query):
                 return
                 
             if data.startswith("default|"):
-                try:
-                    await message.edit_text(
-                        "⏳ **Initializing Download...**\n\n"
-                        "• Please wait while I process your request\n"
-                        "• You'll see progress updates here"
-                    )
-                    
-                    # Get file info
-                    filename = await get_filename(url) or "file"
-                    file_size = await get_file_size(url)
-                    
-                    # Update status with file info
-                    await message.edit_text(
-                        f"📥 **Starting Download...**\n\n"
-                        f"**File:** `{filename}`\n"
-                        f"**Size:** {humanbytes(file_size)}\n\n"
-                        "**Status:** Downloading..."
-                    )
-                    
-                    # Start download process
-                    file_path = await async_download_file(
-                        url=url,
-                        filename=filename,
-                        progress=progress_for_pyrogram,
-                        progress_args=(message, time.time())
-                    )
-                    
-                    # Upload file
-                    await send_file_with_thumbnail(
-                        client=client,
-                        chat_id=chat_id,
-                        document=file_path,
-                        file_name=filename,
-                        caption=f"📤 **Upload Complete!**\n\n**Filename:** `{filename}`",
-                        progress=progress_for_pyrogram,
-                        progress_args=(message, time.time())
-                    )
-                    
-                    # Cleanup
-                    try:
-                        os.remove(file_path)
-                        del pending_downloads[file_id]
-                    except:
-                        pass
-                        
-                except Exception as e:
-                    error_msg = str(e)
-                    await message.edit_text(f"❌ **Download Failed!**\n\n`{error_msg}`")
-                    
-            elif data.startswith("rename|"):
-                try:
-                    await message.edit_text(
-                        "✏️ **Send me the new file name**\n\n"
-                        "• Send name without extension\n"
-                        "• Or /cancel to abort"
-                    )
-                    pending_renames[chat_id] = {"url": url, "type": "direct"}
-                except:
-                    await message.reply_text("❌ Failed to start rename process. Please try again.")
-                    
-        # Handle other existing callbacks...
-        # ...existing callback handlers...
+                # Existing download logic
+                await handle_download_or_upload(client, message, url)
+            else:
+                await handle_download_or_upload(client, message, url, download_type="rename")
+            return
+        
+        else:
+            # Unknown callback data
+            await callback_query.answer("❌ Invalid button.", show_alert=True)
         
     except Exception as e:
         logging.error(f"Callback Error: {str(e)}")
@@ -750,7 +786,7 @@ async def handle_message(client, message):
         if rename_info.get("type") == "youtube":
             await download_youtube(client, message, rename_info["url"], text)
         else:
-            await handle_download(client, message, rename_info["url"], text)
+            await handle_download_or_upload(client, message, rename_info["url"], text)
         return
         
     if re.match(YOUTUBE_REGEX, text):
@@ -829,98 +865,58 @@ async def download_youtube(client, progress_msg, url, download_type="video"):
             # Update progress message with video details
             title = info_dict.get('title', 'Unknown Title')
             uploader = info_dict.get('uploader', 'Unknown Uploader')
-            duration = info_dict.get('duration', 0)
             
+            # Modify progress message
             await progress_msg.edit_text(
-                f"📥 **Downloading {download_type.capitalize()}...**\n\n"
-                f"📹 **Title:** `{title}`\n"
-                f"👤 **Uploader:** `{uploader}`\n"
-                f"⏱️ **Duration:** {duration} seconds"
+                f"🎬 **YouTube {download_type.capitalize()}**\n\n"
+                f"**Title:** `{title}`\n"
+                f"**Uploader:** `{uploader}`\n"
+                "**Status:** Preparing download..."
             )
             
             # Download the file
-            downloaded_file = ydl.download([url])[0]
-        
-        # Prepare file for upload
-        if download_type == "video":
-            # Find the video file
-            video_file = [f for f in os.listdir() if f.endswith('.mp4')][0]
+            ydl_opts['outtmpl'] = os.path.join(DOWNLOAD_LOCATION, ydl_opts['outtmpl'])
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                file_path = ydl.download([url])[0]
             
-            # Get thumbnail
-            thumbnail_url = info_dict.get('thumbnail')
-            thumbnail_file = None
-            if thumbnail_url:
-                try:
-                    thumbnail_file = f"{os.path.splitext(video_file)[0]}.jpg"
-                    async with aiohttp.ClientSession() as session:
-                        async with session.get(thumbnail_url) as resp:
-                            if resp.status == 200:
-                                with open(thumbnail_file, 'wb') as f:
-                                    f.write(await resp.read())
-                except Exception as e:
-                    logging.error(f"Thumbnail download error: {e}")
-                    thumbnail_file = None
+            # Get the actual downloaded file path
+            if isinstance(file_path, list):
+                file_path = file_path[0]
             
-            # Upload video
-            await progress_msg.edit_text(f"📤 **Uploading Video:** `{title}`")
-            await client.send_video(
-                progress_msg.chat.id,
-                video_file,
-                caption=f"🎥 {title}",
-                duration=duration,
-                thumb=thumbnail_file,
-                progress=progress_for_pyrogram,
-                progress_args=(progress_msg, "Uploading", time.time())
+            # Send the file using the unified handler
+            sent_file = await send_file_with_thumbnail(
+                client=client,
+                chat_id=progress_msg.chat.id,
+                document=file_path,
+                file_name=os.path.basename(file_path),
+                caption=f"**📥 YouTube {download_type.capitalize()}**\n\n"
+                        f"**Title:** `{title}`\n"
+                        f"**Uploader:** `{uploader}`"
             )
             
-            # Clean up files
-            os.remove(video_file)
-            if thumbnail_file and os.path.exists(thumbnail_file):
-                os.remove(thumbnail_file)
-        
-        else:  # audio
-            # Find the audio file
-            audio_file = [f for f in os.listdir() if f.endswith('.mp3')][0]
+            # Delete progress message
+            try:
+                await progress_msg.delete()
+            except Exception as e:
+                logging.error(f"Error deleting progress message: {str(e)}")
             
-            # Get thumbnail
-            thumbnail_url = info_dict.get('thumbnail')
-            thumbnail_file = None
-            if thumbnail_url:
-                try:
-                    thumbnail_file = f"{os.path.splitext(audio_file)[0]}.jpg"
-                    async with aiohttp.ClientSession() as session:
-                        async with session.get(thumbnail_url) as resp:
-                            if resp.status == 200:
-                                with open(thumbnail_file, 'wb') as f:
-                                    f.write(await resp.read())
-                except Exception as e:
-                    logging.error(f"Thumbnail download error: {e}")
-                    thumbnail_file = None
+            # Cleanup downloaded file
+            try:
+                os.remove(file_path)
+            except Exception as e:
+                logging.error(f"Error removing file: {str(e)}")
             
-            # Upload audio
-            await progress_msg.edit_text(f"📤 **Uploading Audio:** `{title}`")
-            await client.send_audio(
-                progress_msg.chat.id,
-                audio_file,
-                caption=f"🎵 {title}",
-                duration=duration,
-                thumb=thumbnail_file,
-                progress=progress_for_pyrogram,
-                progress_args=(progress_msg, "Uploading", time.time())
-            )
-            
-            # Clean up files
-            os.remove(audio_file)
-            if thumbnail_file and os.path.exists(thumbnail_file):
-                os.remove(thumbnail_file)
-        
-        # Delete progress message
-        await progress_msg.delete()
+            return sent_file
     
     except Exception as e:
-        logging.error(f"YouTube download error: {str(e)}")
-        await progress_msg.edit_text(f"❌ **Download failed:** {str(e)}")
-        raise
+        error_msg = str(e)
+        try:
+            await progress_msg.edit_text(f"❌ **Download Failed!**\n\n`{error_msg}`")
+        except:
+            await progress_msg.reply_text(f"❌ **Download Failed!**\n\n`{error_msg}`")
+        
+        logging.error(f"YouTube Download Error: {error_msg}")
+        return None
 
 async def broadcast_handler(client, message: Message):
     """

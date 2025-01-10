@@ -91,7 +91,6 @@ AUTH_USERS - Your Telegram ID
 3. Click Deploy
 
 The bot will be automatically deployed on Railway's infrastructure.
-   ```
 
 ## Commands
 

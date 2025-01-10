@@ -26,6 +26,7 @@ from config import (
     SESSION_STRING,
     MAX_FILE_SIZE,
     DOWNLOAD_LOCATION,
+    THUMB_LOCATION,
     OWNER_ID
 )
 
@@ -391,12 +392,57 @@ async def help_command(client, message):
 async def about_command(client, message):
     await message.reply_text(ABOUT_TEXT)
 
+async def save_photo(client, message):
+    """Save photo as thumbnail"""
+    try:
+        # Get the photo file
+        photo = message.reply_to_message.photo[-1]
+        download_path = os.path.join(THUMB_LOCATION, f"{message.chat.id}_temp.jpg")
+        
+        # Download the photo
+        await client.download_media(
+            message=photo,
+            file_name=download_path
+        )
+        
+        # Save as thumbnail
+        thumb_path = await save_thumb(message.chat.id, download_path)
+        
+        if thumb_path:
+            await message.reply_text("✅ **Custom thumbnail saved successfully!**")
+        else:
+            await message.reply_text("❌ **Failed to save thumbnail!**")
+            
+        # Cleanup temp file
+        try:
+            os.remove(download_path)
+        except:
+            pass
+            
+    except Exception as e:
+        await message.reply_text(f"❌ **Error saving thumbnail:**\n\n`{str(e)}`")
+
 @bot.on_message(filters.command(["thumb"]))
 async def handle_thumb_command(client, message):
-    if not message.reply_to_message or not message.reply_to_message.photo:
-        await message.reply_text("❌ Reply to a photo to set it as thumbnail.")
-        return
-    await save_photo(client, message)
+    """Handle thumbnail command"""
+    if message.reply_to_message and message.reply_to_message.photo:
+        # Save thumbnail
+        await save_photo(client, message)
+    else:
+        # Show current thumbnail
+        thumb = get_thumb(message.chat.id)
+        if thumb:
+            await message.reply_photo(
+                photo=thumb,
+                caption="🖼️ **Your current thumbnail**\n\n"
+                "• Reply to a photo with /thumb to change it\n"
+                "• Use /delthumb to remove it"
+            )
+        else:
+            await message.reply_text(
+                "❌ **No thumbnail set!**\n\n"
+                "• Reply to a photo with /thumb to set it"
+            )
 
 @bot.on_message(filters.command(["delthumb"]))
 async def handle_delthumb_command(client, message):

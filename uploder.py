@@ -553,6 +553,39 @@ async def callback_handler(client, callback_query):
         # Always answer the callback query to remove loading state
         await callback_query.answer()
         
+        # YouTube download handler
+        if data.startswith("ytdl|"):
+            parts = data.split("|")
+            if len(parts) == 3:
+                url = parts[1]
+                download_type = parts[2]
+                
+                if download_type == "default":
+                    # Quick download (video)
+                    keyboard = InlineKeyboardMarkup([
+                        [
+                            InlineKeyboardButton("🎥 Video", callback_data=f"ytdl_video"),
+                            InlineKeyboardButton("🎵 Audio", callback_data=f"ytdl_audio")
+                        ]
+                    ])
+                    
+                    await callback_query.message.edit_text(
+                        "**Choose Download Type:**", 
+                        reply_markup=keyboard
+                    )
+                elif download_type == "rename":
+                    # Custom name for YouTube download
+                    pending_renames[callback_query.from_user.id] = {
+                        "type": "youtube",
+                        "url": url
+                    }
+                    await callback_query.message.edit_text(
+                        "📝 **Send me a custom file name**\n\n"
+                        "• Send the name you want (without extension)\n"
+                        "• Or send /cancel to abort"
+                    )
+            return
+        
         if data == "start":
             keyboard = InlineKeyboardMarkup([
                 [
@@ -568,13 +601,8 @@ async def callback_handler(client, callback_query):
             ])
             
             await callback_query.message.edit_text(
-                START_TEXT.format(
-                    status="⭐ Free User",
-                    storage="Up to 2GB per file",
-                    features="• Upload files up to 2GB\n• Basic thumbnails\n• Standard support"
-                ),
-                reply_markup=keyboard,
-                disable_web_page_preview=True
+                START_TEXT.format(callback_query.from_user.first_name),
+                reply_markup=keyboard
             )
         
         elif data == "settings":
@@ -829,4 +857,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

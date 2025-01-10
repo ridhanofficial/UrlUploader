@@ -374,6 +374,23 @@ def TimeFormatter(milliseconds: int) -> str:
         ((str(milliseconds) + "ms, ") if milliseconds else "")
     return tmp[:-2]
 
+# Bot start text
+START_TEXT = """
+👋 **Welcome to URL Uploader Bot!**
+
+I can help you upload files from various sources:
+• Direct URLs
+• YouTube links
+• Telegram files
+
+**Features:**
+• Upload files up to 4GB
+• Custom thumbnails
+• File size and type detection
+
+Use /help to see all available commands.
+"""
+
 # Message handlers
 @bot.on_message(filters.command(["start"]))
 async def start_command(client, message):

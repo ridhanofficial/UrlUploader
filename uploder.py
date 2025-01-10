@@ -829,6 +829,8 @@ async def download_youtube(
             
             # Detailed error handling
             error_message = str(yt_error)
+            
+            # Specific error handling for bot/authentication issues
             if "Private video" in error_message:
                 # Try alternative extraction methods
                 ydl_opts['cookiesfrombrowser'] = None
@@ -1825,241 +1827,6 @@ class FastDownloadEngine:
 # Global download engine
 download_engine = FastDownloadEngine()
 
-async def safe_upload_file(
-    client, 
-    chat_id, 
-    file_path, 
-    progress_msg=None,
-    caption=None
-):
-    """
-    Safe file upload with comprehensive error handling and multiple fallback methods
-    
-    :param client: Telegram client
-    :param chat_id: Destination chat ID
-    :param file_path: Path to file to upload
-    :param progress_msg: Optional progress message
-    :param caption: Optional file caption
-    :return: Uploaded file details or None
-    """
-    try:
-        # Validate input parameters
-        if not file_path:
-            logging.error("File path is None")
-            if progress_msg:
-                try:
-                    await progress_msg.edit_text("❌ **Upload Failed**: Invalid file path (None)")
-                except Exception as edit_error:
-                    logging.error(f"Error editing message: {edit_error}")
-                    await progress_msg.reply_text("❌ **Upload Failed**: Invalid file path")
-            return None
-        
-        # Check file existence
-        if not os.path.exists(file_path):
-            logging.error(f"File does not exist: {file_path}")
-            if progress_msg:
-                try:
-                    await progress_msg.edit_text(f"❌ **Upload Failed**: File not found\nPath: `{file_path}`")
-                except Exception as edit_error:
-                    logging.error(f"Error editing message: {edit_error}")
-                    await progress_msg.reply_text(f"❌ **Upload Failed**: File not found\nPath: `{file_path}`")
-            return None
-        
-        # Determine file type
-        file_extension = os.path.splitext(file_path)[1].lower()
-        file_size = os.path.getsize(file_path)
-        
-        # File size validation
-        MAX_FILE_SIZE = 2 * 1024 * 1024 * 1024  # 2GB limit
-        if file_size > MAX_FILE_SIZE:
-            logging.error(f"File too large: {file_size} bytes")
-            if progress_msg:
-                try:
-                    await progress_msg.edit_text(f"❌ **Upload Failed**: File too large ({file_size/1024/1024:.2f} MB)")
-                except Exception as edit_error:
-                    logging.error(f"Error editing message: {edit_error}")
-                    await progress_msg.reply_text(f"❌ **Upload Failed**: File too large ({file_size/1024/1024:.2f} MB)")
-            return None
-        
-        # Default caption
-        if not caption:
-            caption = f"📤 **Uploaded File**: `{os.path.basename(file_path)}`"
-        
-        # Prepare progress tracking
-        def progress_callback(current, total):
-            try:
-                if progress_msg:
-                    progress = (current / total) * 100 if total > 0 else 0
-                    asyncio.create_task(
-                        safe_edit_progress(
-                            progress_msg, 
-                            f"📤 **Uploading**: {progress:.1f}% ({current/1024/1024:.1f}/{total/1024/1024:.1f} MB)"
-                        )
-                    )
-            except Exception as e:
-                logging.error(f"Progress update error: {e}")
-        
-        # Upload methods with fallback
-        upload_methods = [
-            ('send_document', client.send_document),
-            ('send_video', client.send_video),
-            ('send_audio', client.send_audio)
-        ]
-        
-        # Detailed logging of file attributes
-        logging.info(f"Preparing to upload file: {file_path}")
-        logging.info(f"File extension: {file_extension}")
-        logging.info(f"File size: {file_size} bytes")
-        
-        for method_name, upload_method in upload_methods:
-            try:
-                logging.info(f"Attempting upload with method: {method_name}")
-                
-                # Attempt upload with specific method
-                uploaded_file = await upload_method(
-                    chat_id=chat_id,
-                    document=file_path,
-                    caption=caption,
-                    progress=progress_callback
-                )
-                
-                # Success logging
-                logging.info(f"Successfully uploaded file using {method_name}")
-                
-                # Optional: Delete local file after successful upload
-                try:
-                    os.remove(file_path)
-                    logging.info(f"Deleted local file: {file_path}")
-                except Exception as cleanup_error:
-                    logging.warning(f"File cleanup error: {cleanup_error}")
-                
-                return uploaded_file
-            
-            except Exception as upload_error:
-                logging.error(f"Upload method {method_name} failed: {upload_error}")
-                logging.error(f"Error details: {traceback.format_exc()}")
-                continue
-        
-        # If all upload methods fail
-        logging.error("All upload methods failed")
-        if progress_msg:
-            try:
-                await progress_msg.edit_text("❌ **Upload Failed**: Unable to upload file")
-            except Exception as edit_error:
-                logging.error(f"Error editing message: {edit_error}")
-                await progress_msg.reply_text("❌ **Upload Failed**: Unable to upload file")
-        
-        return None
-    
-    except Exception as general_error:
-        logging.error(f"General upload error: {general_error}")
-        logging.error(f"Error details: {traceback.format_exc()}")
-        
-        if progress_msg:
-            try:
-                await progress_msg.edit_text(f"❌ **Upload Failed**: {str(general_error)}")
-            except Exception as edit_error:
-                logging.error(f"Error editing message: {edit_error}")
-                await progress_msg.reply_text(f"❌ **Upload Failed**: {str(general_error)}")
-        
-        return None
-
-async def safe_edit_progress(message, text):
-    """
-    Safely edit progress message with multiple fallback strategies
-    
-    :param message: Message to edit
-    :param text: Progress text
-    :return: None
-    """
-    try:
-        # Primary method: edit_text
-        await message.edit_text(text)
-    except FloodWait as flood:
-        # Handle Telegram flood wait
-        logging.warning(f"Flood wait: {flood.x} seconds")
-        await asyncio.sleep(flood.x)
-        await safe_edit_progress(message, text)
-    except Exception as e:
-        # Fallback: reply to original message
-        try:
-            await message.reply_text(text)
-        except Exception as reply_error:
-            logging.error(f"Failed to update progress: {reply_error}")
-
-async def progress_for_pyrogram(current, total, ud_type, message, start):
-    """
-    Advanced progress tracker with detailed bar and ETA
-    
-    :param current: Current progress
-    :param total: Total file size
-    :param message: Message to update
-    :param start_time: Start time of download/upload
-    :param file_name: Name of the file being processed
-    :param upload_type: Type of operation (download/upload)
-    """
-    try:
-        # Ensure upload_type is a string
-        upload_type = str(ud_type).lower()
-        
-        now = time.time()
-        diff = now - start
-        
-        if current == 0:
-            return
-        
-        # Calculate speed
-        speed = current / diff if diff > 0 else 0
-        
-        # Calculate ETA
-        if speed > 0:
-            time_to_complete = (total - current) / speed
-            eta = datetime.timedelta(seconds=int(time_to_complete))
-        else:
-            eta = datetime.timedelta(seconds=0)
-        
-        # Calculate percentage
-        percentage = current * 100 / total if total > 0 else 0
-        
-        # Create progress bar
-        progress_bar_length = 20
-        filled_length = int(progress_bar_length * current // total)
-        bar = '█' * filled_length + '░' * (progress_bar_length - filled_length)
-        
-        # Format speed
-        if speed > 1024 * 1024:
-            speed_str = f"{speed / (1024 * 1024):.2f} MB/s"
-        elif speed > 1024:
-            speed_str = f"{speed / 1024:.2f} KB/s"
-        else:
-            speed_str = f"{speed:.2f} B/s"
-        
-        # Construct status message
-        status_message = (
-            f"**{upload_type.capitalize()} Progress** 📥\n"
-            f"📁 **File**: `{file_name}`\n"
-            f"🔢 **Progress**: [{bar}] {percentage:.2f}%\n"
-            f"📊 **Size**: {humanbytes(current)} / {humanbytes(total)}\n"
-            f"🚀 **Speed**: {speed_str}\n"
-            f"⏳ **ETA**: {eta}"
-        )
-        
-        # Update message every 5 seconds or at significant progress points
-        if (now - getattr(progress_for_pyrogram, 'last_update', 0) > 5) or (current == total):
-            try:
-                if hasattr(message, 'edit_text'):
-                    await message.edit_text(status_message)
-                else:
-                    await message.reply_text(status_message)
-                progress_for_pyrogram.last_update = now
-            except FloodWait as e:
-                await asyncio.sleep(e.x)
-            except Exception as edit_error:
-                logging.error(f"Progress message update error: {edit_error}")
-    
-    except Exception as e:
-        logging.error(f"Progress tracking error: {e}")
-
 async def send_file(
     client, 
     chat_id, 
@@ -2186,3 +1953,223 @@ async def send_file(
             logging.error(f"Could not send error notification: {notification_error}")
         
         raise
+
+# Alias for backward compatibility
+send_file_with_thumbnail = send_file
+
+async def safe_upload_file(
+    client, 
+    chat_id, 
+    file_path, 
+    progress_msg=None,
+    caption=None
+):
+    """
+    Safe file upload with comprehensive error handling and multiple fallback methods
+    
+    :param client: Telegram client
+    :param chat_id: Destination chat ID
+    :param file_path: Path to file to upload
+    :param progress_msg: Optional progress message
+    :param caption: Optional file caption
+    :return: Uploaded file details or None
+    """
+    try:
+        # Validate input parameters
+        if not file_path:
+            logging.error("File path is None")
+            if progress_msg:
+                try:
+                    await progress_msg.edit_text("❌ **Upload Failed**: Invalid file path (None)")
+                except Exception as edit_error:
+                    logging.error(f"Error editing message: {edit_error}")
+                    await progress_msg.reply_text("❌ **Upload Failed**: Invalid file path")
+            return None
+        
+        # Check file existence
+        if not os.path.exists(file_path):
+            logging.error(f"File does not exist: {file_path}")
+            if progress_msg:
+                try:
+                    await progress_msg.edit_text(f"❌ **Upload Failed**: File not found\nPath: `{file_path}`")
+                except Exception as edit_error:
+                    logging.error(f"Error editing message: {edit_error}")
+                    await progress_msg.reply_text(f"❌ **Upload Failed**: File not found\nPath: `{file_path}`")
+            return None
+        
+        # Determine file type
+        file_extension = os.path.splitext(file_path)[1].lower()
+        file_size = os.path.getsize(file_path)
+        
+        # File size validation
+        MAX_FILE_SIZE = 2 * 1024 * 1024 * 1024  # 2GB limit
+        if file_size > MAX_FILE_SIZE:
+            logging.error(f"File too large: {file_size} bytes")
+            if progress_msg:
+                try:
+                    await progress_msg.edit_text(f"❌ **Upload Failed**: File too large ({file_size/1024/1024:.2f} MB)")
+                except Exception as edit_error:
+                    logging.error(f"Error editing message: {edit_error}")
+                    await progress_msg.reply_text(f"❌ **Upload Failed**: File too large ({file_size/1024/1024:.2f} MB)")
+            return None
+        
+        # Default caption
+        if not caption:
+            caption = f"📤 **Uploaded File**: `{os.path.basename(file_path)}`"
+        
+        # Prepare progress tracking
+        def progress_callback(current, total):
+            try:
+                if progress_msg:
+                    progress = (current / total) * 100 if total > 0 else 0
+                    asyncio.create_task(
+                        safe_edit_progress(
+                            progress_msg, 
+                            f"📤 **Uploading**: {progress:.1f}% ({current/1024/1024:.1f}/{total/1024/1024:.1f} MB)"
+                        )
+                    )
+            except Exception as e:
+                logging.error(f"Progress update error: {e}")
+        
+        # Detailed logging of file attributes
+        logging.info(f"Preparing to upload file: {file_path}")
+        logging.info(f"File extension: {file_extension}")
+        logging.info(f"File size: {file_size} bytes")
+        
+        # Attempt upload
+        try:
+            uploaded_file = await send_file(
+                client=client,
+                chat_id=chat_id,
+                document=file_path,
+                file_name=os.path.basename(file_path),
+                caption=caption
+            )
+            
+            # Success logging
+            logging.info(f"Successfully uploaded file: {file_path}")
+            
+            return uploaded_file
+        
+        except Exception as upload_error:
+            logging.error(f"Upload failed: {upload_error}")
+            logging.error(f"Error details: {traceback.format_exc()}")
+            
+            # Error notification
+            if progress_msg:
+                try:
+                    await progress_msg.edit_text(f"❌ **Upload Failed**: {str(upload_error)}")
+                except Exception as edit_error:
+                    logging.error(f"Error editing message: {edit_error}")
+                    await progress_msg.reply_text(f"❌ **Upload Failed**: {str(upload_error)}")
+            
+            return None
+    
+    except Exception as general_error:
+        logging.error(f"General upload error: {general_error}")
+        logging.error(f"Error details: {traceback.format_exc()}")
+        
+        if progress_msg:
+            try:
+                await progress_msg.edit_text(f"❌ **Upload Failed**: {str(general_error)}")
+            except Exception as edit_error:
+                logging.error(f"Error editing message: {edit_error}")
+                await progress_msg.reply_text(f"❌ **Upload Failed**: {str(general_error)}")
+        
+        return None
+
+async def safe_edit_progress(message, text):
+    """
+    Safely edit progress message with multiple fallback strategies
+    
+    :param message: Message to edit
+    :param text: Progress text
+    :return: None
+    """
+    try:
+        # Primary method: edit_text
+        await message.edit_text(text)
+    except FloodWait as flood:
+        # Handle Telegram flood wait
+        logging.warning(f"Flood wait: {flood.x} seconds")
+        await asyncio.sleep(flood.x)
+        await safe_edit_progress(message, text)
+    except Exception as e:
+        # Fallback: reply to original message
+        try:
+            await message.reply_text(text)
+        except Exception as reply_error:
+            logging.error(f"Failed to update progress: {reply_error}")
+
+async def progress_for_pyrogram(current, total, ud_type, message, start):
+    """
+    Advanced progress tracker with detailed bar and ETA
+    
+    :param current: Current progress
+    :param total: Total file size
+    :param message: Message to update
+    :param start_time: Start time of download/upload
+    :param file_name: Name of the file being processed
+    :param upload_type: Type of operation (download/upload)
+    """
+    try:
+        # Ensure upload_type is a string
+        upload_type = str(ud_type).lower()
+        
+        now = time.time()
+        diff = now - start
+        
+        if current == 0:
+            return
+        
+        # Calculate speed
+        speed = current / diff if diff > 0 else 0
+        
+        # Calculate ETA
+        if speed > 0:
+            time_to_complete = (total - current) / speed
+            eta = datetime.timedelta(seconds=int(time_to_complete))
+        else:
+            eta = datetime.timedelta(seconds=0)
+        
+        # Calculate percentage
+        percentage = current * 100 / total if total > 0 else 0
+        
+        # Create progress bar
+        progress_bar_length = 20
+        filled_length = int(progress_bar_length * current // total)
+        bar = '█' * filled_length + '░' * (progress_bar_length - filled_length)
+        
+        # Format speed
+        if speed > 1024 * 1024:
+            speed_str = f"{speed / (1024 * 1024):.2f} MB/s"
+        elif speed > 1024:
+            speed_str = f"{speed / 1024:.2f} KB/s"
+        else:
+            speed_str = f"{speed:.2f} B/s"
+        
+        # Construct status message
+        status_message = (
+            f"**{upload_type.capitalize()} Progress** 📥\n"
+            f"📁 **File**: `{file_name}`\n"
+            f"🔢 **Progress**: [{bar}] {percentage:.2f}%\n"
+            f"📊 **Size**: {humanbytes(current)} / {humanbytes(total)}\n"
+            f"🚀 **Speed**: {speed_str}\n"
+            f"⏳ **ETA**: {eta}"
+        )
+        
+        # Update message every 5 seconds or at significant progress points
+        if (now - getattr(progress_for_pyrogram, 'last_update', 0) > 5) or (current == total):
+            try:
+                if hasattr(message, 'edit_text'):
+                    await message.edit_text(status_message)
+                else:
+                    await message.reply_text(status_message)
+                progress_for_pyrogram.last_update = now
+            except FloodWait as e:
+                await asyncio.sleep(e.x)
+            except Exception as edit_error:
+                logging.error(f"Progress message update error: {edit_error}")
+    
+    except Exception as e:
+        logging.error(f"Progress tracking error: {e}")

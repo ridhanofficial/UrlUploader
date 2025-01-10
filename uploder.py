@@ -14,6 +14,7 @@ import uuid
 import time
 import asyncio
 import math
+import datetime
 
 from pyrogram import Client, filters
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
@@ -341,182 +342,264 @@ async def send_file_with_thumbnail(client, chat_id, document, file_name, caption
         logging.error(f"Error sending file: {str(e)}")
         raise
 
-async def handle_download_or_upload(client, message, url, filename=None, download_type="direct"):
+async def handle_download_or_upload(
+    client, 
+    message, 
+    url, 
+    download_type="default", 
+    custom_filename=None
+):
     """
     Unified handler for downloading and uploading files
     
     :param client: Pyrogram client
     :param message: Original message
     :param url: URL to download from
-    :param filename: Optional custom filename
-    :param download_type: Type of download (direct/youtube)
+    :param download_type: Type of download (default/rename)
+    :param custom_filename: Custom filename for the download
+    :return: Path of downloaded file or None
     """
     try:
-        # Initial progress message
-        progress_msg = await message.reply_text(
-            "⏳ **Initializing Download...**\n\n"
-            "• Please wait while I process your request\n"
-            "• You'll see progress updates here"
-        )
+        # Generate a unique file ID
+        file_id = str(uuid.uuid4())
         
+        # Send initial progress message
         start_time = time.time()
-        
-        # Determine filename if not provided
-        if not filename:
-            filename = await get_filename(url) or "file"
-        
-        # Get file size
-        file_size = await get_file_size(url)
-        
-        # Update status with file info
-        await progress_msg.edit_text(
-            f"📥 **Starting Download...**\n\n"
-            f"**File:** `{filename}`\n"
-            f"**Size:** {humanbytes(file_size)}\n\n"
-            "**Status:** Downloading..."
+        progress_msg = await message.reply_text(
+            "🔄 **Preparing Download**...", 
+            quote=True
         )
         
-        # Download file
-        file_path = await async_download_file(
-            url=url,
-            filename=filename,
-            progress=progress_for_pyrogram,
-            progress_args=(progress_msg, start_time)
-        )
+        # Determine filename
+        if custom_filename:
+            filename = f"{custom_filename}"
+        else:
+            # Extract filename from URL or generate a unique name
+            filename = url.split('/')[-1] if url.split('/')[-1] else str(uuid.uuid4())
         
-        # Upload file
-        sent_file = await send_file_with_thumbnail(
-            client=client,
-            chat_id=message.chat.id,
-            document=file_path,
-            file_name=filename,
-            caption=f"📤 **Upload Complete!**\n\n**Filename:** `{filename}`",
-            progress=progress_for_pyrogram,
-            progress_args=(progress_msg, start_time)
-        )
+        # Sanitize filename
+        filename = re.sub(r'[^\w\-_\. ]', '_', filename)
         
-        # Delete progress message
         try:
-            await progress_msg.delete()
-        except Exception as e:
-            logging.error(f"Error deleting progress message: {str(e)}")
+            # Attempt to get file size
+            async with aiohttp.ClientSession() as session:
+                async with session.head(url) as response:
+                    file_size = int(response.headers.get('Content-Length', 0))
+        except Exception:
+            file_size = 0
         
-        # Cleanup downloaded file
+        # Download the file
         try:
-            os.remove(file_path)
-        except Exception as e:
-            logging.error(f"Error removing file: {str(e)}")
+            # Determine download method based on URL
+            if "youtube.com" in url or "youtu.be" in url:
+                # YouTube download
+                downloaded_file = await download_youtube(
+                    url, 
+                    progress_msg, 
+                    start_time, 
+                    filename
+                )
+            else:
+                # Direct download
+                downloaded_file = await download_file(
+                    url, 
+                    filename, 
+                    progress_msg, 
+                    start_time, 
+                    file_size
+                )
+            
+            # Check if download was successful
+            if not downloaded_file or not os.path.exists(downloaded_file):
+                await progress_msg.edit_text("❌ **Download Failed**: Unable to download file")
+                return None
+            
+            # Upload the file
+            try:
+                await progress_msg.edit_text("📤 **Uploading File**...")
+                
+                # Upload with progress tracking
+                await client.send_document(
+                    chat_id=message.chat.id,
+                    document=downloaded_file,
+                    caption=f"📤 **Upload Complete!**\n\n**Filename:** `{os.path.basename(downloaded_file)}`",
+                    progress=progress_for_pyrogram,
+                    progress_args=(progress_msg, start_time, os.path.basename(downloaded_file), file_size)
+                )
+                
+                # Delete the progress message
+                await progress_msg.delete()
+                
+                # Clean up the downloaded file
+                try:
+                    os.remove(downloaded_file)
+                except Exception as cleanup_error:
+                    logging.error(f"File cleanup error: {cleanup_error}")
+                
+                return downloaded_file
+            
+            except Exception as upload_error:
+                logging.error(f"Upload Error: {upload_error}")
+                await progress_msg.edit_text(f"❌ **Upload Failed**: {str(upload_error)}")
+                return None
         
-        return sent_file
+        except Exception as download_error:
+            logging.error(f"Download Error: {download_error}")
+            await progress_msg.edit_text(f"❌ **Download Failed**: {str(download_error)}")
+            return None
     
     except Exception as e:
-        # Handle and log any errors during download/upload
-        error_msg = str(e)
+        logging.error(f"General Download/Upload Error: {e}")
         try:
-            await progress_msg.edit_text(f"❌ **Process Failed!**\n\n`{error_msg}`")
+            await message.reply_text(f"❌ **Process Failed**: {str(e)}")
         except:
-            await message.reply_text(f"❌ **Process Failed!**\n\n`{error_msg}`")
-        
-        logging.error(f"Download/Upload Error: {error_msg}")
+            pass
         return None
 
-def progress_for_pyrogram(current, total, ud_type, message, start):
+async def download_file(
+    url, 
+    filename, 
+    progress_msg, 
+    start_time, 
+    file_size
+):
     """
-    Custom progress callback for file uploads and downloads
+    Download a file from a direct URL
+    
+    :param url: Direct download URL
+    :param filename: Name to save the file as
+    :param progress_msg: Message to update progress
+    :param start_time: Start time of download
+    :param file_size: Total file size
+    :return: Path to downloaded file
+    """
+    try:
+        # Ensure downloads directory exists
+        os.makedirs('downloads', exist_ok=True)
+        
+        # Full path for the file
+        file_path = os.path.join('downloads', filename)
+        
+        # Download the file
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as response:
+                if response.status != 200:
+                    await progress_msg.edit_text(f"❌ **Download Failed**: HTTP {response.status}")
+                    return None
+                
+                # Open file for writing
+                with open(file_path, 'wb') as f:
+                    downloaded = 0
+                    async for chunk in response.content.iter_chunked(1024):
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        
+                        # Update progress
+                        await progress_for_pyrogram(
+                            downloaded, 
+                            file_size, 
+                            progress_msg, 
+                            start_time, 
+                            filename
+                        )
+        
+        return file_path
+    
+    except Exception as e:
+        logging.error(f"Direct Download Error: {e}")
+        await progress_msg.edit_text(f"❌ **Download Failed**: {str(e)}")
+        return None
+
+async def progress_for_pyrogram(
+    current, 
+    total, 
+    message, 
+    start_time, 
+    file_name, 
+    upload_type="download"
+):
+    """
+    Advanced progress tracker with detailed bar and ETA
     
     :param current: Current progress
     :param total: Total file size
-    :param ud_type: Upload/Download type
-    :param message: Telegram message to update
-    :param start: Start time of the operation
+    :param message: Message to update
+    :param start_time: Start time of download/upload
+    :param file_name: Name of the file being processed
+    :param upload_type: Type of operation (download/upload)
     """
-    now = time.time()
-    diff = now - start
-    
-    if current == total:
-        # Operation completed
-        return
-    
-    if round(diff % 10.00) == 0 or current == total:
-        # Calculate progress percentage
-        percentage = current * 100 / total
+    try:
+        now = time.time()
+        diff = now - start_time
+        
+        if current == 0:
+            return
         
         # Calculate speed
         speed = current / diff if diff > 0 else 0
-        speed_str = humanbytes(speed) + "/s"
         
         # Calculate ETA
-        eta = int((total - current) / speed) if speed > 0 else 0
-        eta_str = TimeFormatter(eta * 1000)
+        if speed > 0:
+            time_to_complete = (total - current) / speed
+            eta = datetime.timedelta(seconds=int(time_to_complete))
+        else:
+            eta = datetime.timedelta(seconds=0)
+        
+        # Calculate percentage
+        percentage = current * 100 / total if total > 0 else 0
         
         # Create progress bar
-        progress_bar_length = 15
+        progress_bar_length = 20
         filled_length = int(progress_bar_length * current // total)
-        progress_bar = '█' * filled_length + '░' * (progress_bar_length - filled_length)
+        bar = '█' * filled_length + '░' * (progress_bar_length - filled_length)
         
-        # Prepare status message
-        status_msg = (
-            f"**{ud_type.capitalize()}ing File**\n\n"
-            f"📊 Progress: `{progress_bar}` {percentage:.1f}%\n"
-            f"📥 Downloaded: `{humanbytes(current)}` of `{humanbytes(total)}`\n"
-            f"🚀 Speed: `{speed_str}`\n"
-            f"⏱️ ETA: `{eta_str}`"
+        # Format speed
+        if speed > 1024 * 1024:
+            speed_str = f"{speed / (1024 * 1024):.2f} MB/s"
+        elif speed > 1024:
+            speed_str = f"{speed / 1024:.2f} KB/s"
+        else:
+            speed_str = f"{speed:.2f} B/s"
+        
+        # Construct status message
+        status_message = (
+            f"**{upload_type.capitalize()} Progress** 📥\n"
+            f"📁 **File**: `{file_name}`\n"
+            f"🔢 **Progress**: [{bar}] {percentage:.2f}%\n"
+            f"📊 **Size**: {humanbytes(current)} / {humanbytes(total)}\n"
+            f"🚀 **Speed**: {speed_str}\n"
+            f"⏳ **ETA**: {eta}"
         )
         
-        try:
-            # Update message every 10 seconds or when complete
-            if current != total:
-                # Edit message with progress
-                message.edit_text(status_msg)
-            else:
-                # When download/upload is complete
-                message.edit_text(
-                    f"**✅ {ud_type.capitalize()} Complete!**\n"
-                    f"📦 Total Size: `{humanbytes(total)}`\n"
-                    f"⏱️ Time Taken: `{TimeFormatter((now - start) * 1000)}`"
-                )
-        except FloodWait as e:
-            # Handle Telegram's flood wait
-            asyncio.sleep(e.x)
-        except Exception as e:
-            # Log any other exceptions
-            logging.error(f"Progress update error: {str(e)}")
+        # Update message every 5 seconds or at significant progress points
+        if (now - getattr(progress_for_pyrogram, 'last_update', 0) > 5) or (current == total):
+            try:
+                await message.edit_text(status_message)
+                progress_for_pyrogram.last_update = now
+            except FloodWait as e:
+                await asyncio.sleep(e.x)
+            except Exception as edit_error:
+                logging.error(f"Progress message update error: {edit_error}")
+    
+    except Exception as e:
+        logging.error(f"Progress tracking error: {e}")
 
-def TimeFormatter(milliseconds: int) -> str:
+def humanbytes(size_in_bytes):
     """
-    Convert milliseconds to human-readable time format
+    Convert bytes to human-readable format
     
-    :param milliseconds: Time in milliseconds
-    :return: Formatted time string
+    :param size_in_bytes: Size in bytes
+    :return: Formatted string of file size
     """
-    seconds, milliseconds = divmod(int(milliseconds), 1000)
-    minutes, seconds = divmod(seconds, 60)
-    hours, minutes = divmod(minutes, 60)
-    days, hours = divmod(hours, 24)
+    if size_in_bytes == 0:
+        return "0 B"
     
-    # Format the time components
-    time_str = []
-    if days > 0:
-        time_str.append(f"{days}d")
-    if hours > 0:
-        time_str.append(f"{hours}h")
-    if minutes > 0:
-        time_str.append(f"{minutes}m")
-    if seconds > 0:
-        time_str.append(f"{seconds}s")
+    size_name = ("B", "KB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB")
+    i = int(math.floor(math.log(size_in_bytes, 1024)))
+    p = math.pow(1024, i)
+    s = round(size_in_bytes / p, 2)
     
-    return " ".join(time_str) if time_str else "0s"
-
-def humanbytes(size):
-    if not size:
-        return ""
-    power = 2**10
-    n = 0
-    Dic_powerN = {0: ' ', 1: 'Ki', 2: 'Mi', 3: 'Gi', 4: 'Ti'}
-    while size > power:
-        size /= power
-        n += 1
-    return str(round(size, 2)) + " " + Dic_powerN[n] + 'B'
+    return f"{s} {size_name[i]}"
 
 # Initialize bot with proper settings
 bot = Client(
@@ -849,7 +932,7 @@ async def handle_message(client, message):
         if rename_info.get("type") == "youtube":
             await download_youtube(client, message, rename_info["url"], text)
         else:
-            await handle_download_or_upload(client, message, rename_info["url"], text)
+            await handle_download_or_upload(client, message, rename_info["url"], custom_filename=text)
         return
         
     if re.match(YOUTUBE_REGEX, text):
@@ -892,12 +975,12 @@ async def handle_message(client, message):
     else:
         await message.reply_text("❌ **Please send me a valid direct download link or YouTube URL!**")
 
-async def download_youtube(client, progress_msg, url, download_type="video"):
+async def download_youtube(client, message, url, download_type="video"):
     """
     Download YouTube video or audio using yt-dlp
     
     :param client: Pyrogram client
-    :param progress_msg: Progress message to update
+    :param message: Message to update
     :param url: YouTube URL
     :param download_type: 'video' or 'audio'
     """
@@ -930,7 +1013,7 @@ async def download_youtube(client, progress_msg, url, download_type="video"):
             uploader = info_dict.get('uploader', 'Unknown Uploader')
             
             # Modify progress message
-            await progress_msg.edit_text(
+            await message.edit_text(
                 f"🎬 **YouTube {download_type.capitalize()}**\n\n"
                 f"**Title:** `{title}`\n"
                 f"**Uploader:** `{uploader}`\n"
@@ -949,7 +1032,7 @@ async def download_youtube(client, progress_msg, url, download_type="video"):
             # Send the file using the unified handler
             sent_file = await send_file_with_thumbnail(
                 client=client,
-                chat_id=progress_msg.chat.id,
+                chat_id=message.chat.id,
                 document=file_path,
                 file_name=os.path.basename(file_path),
                 caption=f"**📥 YouTube {download_type.capitalize()}**\n\n"
@@ -959,7 +1042,7 @@ async def download_youtube(client, progress_msg, url, download_type="video"):
             
             # Delete progress message
             try:
-                await progress_msg.delete()
+                await message.delete()
             except Exception as e:
                 logging.error(f"Error deleting progress message: {str(e)}")
             
@@ -974,9 +1057,9 @@ async def download_youtube(client, progress_msg, url, download_type="video"):
     except Exception as e:
         error_msg = str(e)
         try:
-            await progress_msg.edit_text(f"❌ **Download Failed!**\n\n`{error_msg}`")
+            await message.edit_text(f"❌ **Download Failed!**\n\n`{error_msg}`")
         except:
-            await progress_msg.reply_text(f"❌ **Download Failed!**\n\n`{error_msg}`")
+            await message.reply_text(f"❌ **Download Failed!**\n\n`{error_msg}`")
         
         logging.error(f"YouTube Download Error: {error_msg}")
         return None
@@ -1126,3 +1209,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

@@ -620,6 +620,80 @@ user = Client(
     workers=2  # Reduced workers to prevent overload
 )
 
+# Dictionary to track recent bot messages
+recent_bot_messages = {}
+
+async def clean_previous_messages(client, chat_id, user_id, max_messages=3):
+    """
+    Clean up previous bot messages for a specific user
+    
+    :param client: Pyrogram client
+    :param chat_id: Chat ID to clean messages from
+    :param user_id: User ID whose messages to clean
+    :param max_messages: Maximum number of messages to keep
+    """
+    try:
+        # Get the list of recent bot messages for this user
+        user_messages = recent_bot_messages.get(user_id, [])
+        
+        # Delete excess messages
+        while len(user_messages) > max_messages:
+            oldest_message = user_messages.pop(0)
+            try:
+                await client.delete_messages(chat_id, oldest_message)
+            except Exception as delete_error:
+                logging.warning(f"Could not delete message {oldest_message}: {delete_error}")
+        
+        # Update the user's message list
+        recent_bot_messages[user_id] = user_messages
+    except Exception as e:
+        logging.error(f"Message cleanup error: {e}")
+
+async def send_tracked_message(
+    client, 
+    chat_id, 
+    text, 
+    user_id=None, 
+    reply_markup=None, 
+    parse_mode=None
+):
+    """
+    Send a message and track it for potential cleanup
+    
+    :param client: Pyrogram client
+    :param chat_id: Chat to send message to
+    :param text: Message text
+    :param user_id: User ID to associate the message with
+    :param reply_markup: Optional reply markup
+    :param parse_mode: Optional parse mode
+    :return: Sent message
+    """
+    try:
+        # Send the message
+        message = await client.send_message(
+            chat_id=chat_id,
+            text=text,
+            reply_markup=reply_markup,
+            parse_mode=parse_mode
+        )
+        
+        # Track the message if user_id is provided
+        if user_id:
+            # Initialize user's message list if not exists
+            if user_id not in recent_bot_messages:
+                recent_bot_messages[user_id] = []
+            
+            # Add the new message ID
+            recent_bot_messages[user_id].append(message.id)
+            
+            # Clean up previous messages
+            await clean_previous_messages(client, chat_id, user_id)
+        
+        return message
+    except Exception as e:
+        logging.error(f"Tracked message send error: {e}")
+        return None
+
 @bot.on_message(filters.command(["start"]) & filters.private)
 async def start_command(client, message: Message):
     """
@@ -660,7 +734,8 @@ async def start_command(client, message: Message):
         ])
         
         # Send welcome message
-        welcome_message = await client.send_message(
+        welcome_message = await send_tracked_message(
+            client=client,
             chat_id=message.chat.id,
             text=START_TEXT.format(
                 first_name=message.from_user.first_name,
@@ -668,8 +743,8 @@ async def start_command(client, message: Message):
                 storage=storage,
                 features=features
             ),
+            user_id=message.from_user.id,
             reply_markup=keyboard,
-            disable_web_page_preview=True,
             parse_mode=ParseMode.MARKDOWN
         )
         
@@ -708,11 +783,12 @@ async def help_command(client, message: Message):
         ])
         
         # Send help message
-        help_message = await client.send_message(
+        help_message = await send_tracked_message(
+            client=client,
             chat_id=message.chat.id,
             text=HELP_TEXT,
+            user_id=message.from_user.id,
             reply_markup=keyboard,
-            disable_web_page_preview=True,
             parse_mode=ParseMode.MARKDOWN
         )
         
@@ -751,11 +827,12 @@ async def about_command(client, message: Message):
         ])
         
         # Send about message
-        about_message = await client.send_message(
+        about_message = await send_tracked_message(
+            client=client,
             chat_id=message.chat.id,
             text=ABOUT_TEXT,
+            user_id=message.from_user.id,
             reply_markup=keyboard,
-            disable_web_page_preview=True,
             parse_mode=ParseMode.MARKDOWN
         )
         
@@ -916,64 +993,44 @@ async def callback_handler(client, callback_query):
 
 @bot.on_message(filters.private & filters.text)
 async def handle_message(client, message):
-    text = message.text
-    chat_id = message.chat.id
-    
-    if text.startswith("/"):
-        return
+    """
+    Handle incoming messages with improved message management
+    """
+    try:
+        # Get user details
+        user_id = message.from_user.id
+        chat_id = message.chat.id
+        text = message.text.strip()
         
-    if chat_id in pending_renames:
-        if text.lower() == "/cancel":
-            pending_renames.pop(chat_id)
-            await message.reply_text("❌ Process Cancelled")
+        # Clean up previous bot messages for this user
+        await clean_previous_messages(client, chat_id, user_id)
+        
+        # Existing message handling logic
+        if text.startswith('/'):
+            # Handle command messages
             return
-            
-        rename_info = pending_renames.pop(chat_id)
-        if rename_info.get("type") == "youtube":
-            await download_youtube(client, message, rename_info["url"], text)
+        
+        if re.match(YOUTUBE_REGEX, text):
+            # YouTube download
+            await download_youtube(client, message, text)
+        elif re.match(URL_REGEX, text):
+            # Direct download
+            await handle_download_or_upload(client, message, text)
         else:
-            await handle_download_or_upload(client, message, rename_info["url"], custom_filename=text)
-        return
-        
-    if re.match(YOUTUBE_REGEX, text):
-        await process_youtube(client, message, text)
-    elif re.match(URL_REGEX, text):
-        # Get file size
-        file_size = await get_file_size(text)
-        
-        # Check file size (2GB limit)
-        if file_size > 2 * 1024 * 1024 * 1024:  # 2GB in bytes
-            await message.reply_text(
-                f"❌ **File size ({humanbytes(file_size)}) is too large!**\n\n"
-                "Maximum allowed size is 2GB"
+            # Invalid input
+            await send_tracked_message(
+                client, 
+                chat_id, 
+                "❌ **Please send me a valid direct download link or YouTube URL!**",
+                user_id=user_id
             )
-            return
-        
-        file_id = str(uuid.uuid4())
-        pending_downloads[file_id] = text
-        
-        original_filename = await get_filename(text) or "File"
-        size_text = humanbytes(file_size) if file_size else "Unknown"
-        
-        keyboard = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("⚡️ Quick Download", callback_data=f"default|{file_id}"),
-                InlineKeyboardButton("✏️ Custom Name", callback_data=f"rename|{file_id}")
-            ],
-            [
-                InlineKeyboardButton("❌ Cancel", callback_data=f"cancel|{file_id}")
-            ]
-        ])
-        
-        await message.reply_text(
-            f"**🔗 URL Detected!**\n\n"
-            f"📦 **File Size:** {size_text}\n"
-            f"📄 **Original Name:** `{original_filename}`\n"
-            f"🎯 **Choose an option:**",
-            reply_markup=keyboard
-        )
-    else:
-        await message.reply_text("❌ **Please send me a valid direct download link or YouTube URL!**")
+    
+    except Exception as e:
+        logging.error(f"Message handler error: {e}")
+        try:
+            await message.reply_text(f"❌ An error occurred: {str(e)}")
+        except:
+            pass
 
 async def download_youtube(client, message, url, download_type="video"):
     """
@@ -1209,4 +1266,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

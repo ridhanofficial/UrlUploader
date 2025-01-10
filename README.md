@@ -19,7 +19,6 @@
 - 📥 Download files from direct URLs
 - 📈 Premium enhanced features
 - 📊 Upload Up to 4GB  
-- 🔄 More concurrent downloads for premium users
 - ✏️ File renaming capability
 - 📈 Progress tracking
 - 📹 YouTube video download support

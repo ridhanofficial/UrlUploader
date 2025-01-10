@@ -539,9 +539,6 @@ async def start_command(client, message: Message):
     except Exception:
         pass
 
-    if not await force_sub(client, message):
-        return
-    
     status, storage, features = await get_user_info(message.from_user.id)
     
     keyboard = InlineKeyboardMarkup([
@@ -553,7 +550,6 @@ async def start_command(client, message: Message):
             InlineKeyboardButton("🤖 About", callback_data="about")
         ],
         [
-            InlineKeyboardButton("🌟 Channel", url=f"https://t.me/{FORCE_SUB_CHANNEL.replace('@', '')}"),
             InlineKeyboardButton("💫 Support", url="https://t.me/your_support")
         ]
     ])
@@ -589,7 +585,6 @@ async def callback_handler(client, callback_query):
                     InlineKeyboardButton("🤖 About", callback_data="about")
                 ],
                 [
-                    InlineKeyboardButton("🌟 Channel", url=f"https://t.me/{FORCE_SUB_CHANNEL.replace('@', '')}"),
                     InlineKeyboardButton("💫 Support", url="https://t.me/your_support")
                 ]
             ])

@@ -994,7 +994,7 @@ async def callback_handler(client, callback_query):
 @bot.on_message(filters.private & filters.text)
 async def handle_message(client, message):
     """
-    Handle incoming messages with improved message management
+    Handle incoming messages with advanced URL processing
     """
     try:
         # Get user details
@@ -1005,25 +1005,110 @@ async def handle_message(client, message):
         # Clean up previous bot messages for this user
         await clean_previous_messages(client, chat_id, user_id)
         
-        # Existing message handling logic
-        if text.startswith('/'):
-            # Handle command messages
+        # Check for rename operation
+        if chat_id in pending_renames:
+            if text.lower() == "/cancel":
+                await send_tracked_message(
+                    client, 
+                    chat_id, 
+                    "❌ **Rename Process Cancelled**",
+                    user_id=user_id
+                )
+                pending_renames.pop(chat_id, None)
+                return
+            
+            rename_info = pending_renames.pop(chat_id)
+            if rename_info.get("type") == "youtube":
+                await download_youtube(client, message, rename_info["url"], text)
+            else:
+                await handle_download_or_upload(
+                    client, 
+                    message, 
+                    rename_info["url"], 
+                    custom_filename=text
+                )
             return
         
+        # Ignore command messages
+        if text.startswith('/'):
+            return
+        
+        # YouTube download
         if re.match(YOUTUBE_REGEX, text):
-            # YouTube download
             await download_youtube(client, message, text)
-        elif re.match(URL_REGEX, text):
-            # Direct download
-            await handle_download_or_upload(client, message, text)
-        else:
-            # Invalid input
-            await send_tracked_message(
-                client, 
-                chat_id, 
-                "❌ **Please send me a valid direct download link or YouTube URL!**",
-                user_id=user_id
-            )
+            return
+        
+        # Direct download URL
+        if re.match(URL_REGEX, text):
+            # Get file details
+            try:
+                file_size = await get_file_size(text)
+                original_filename = await get_filename(text) or "File"
+                
+                # Check file size limit
+                if file_size and file_size > 2 * 1024 * 1024 * 1024:  # 2GB limit
+                    await send_tracked_message(
+                        client, 
+                        chat_id, 
+                        f"❌ **File size ({humanbytes(file_size)}) is too large!**\n\n"
+                        "Maximum allowed size is 2GB",
+                        user_id=user_id
+                    )
+                    return
+                
+                # Generate unique file ID
+                file_id = str(uuid.uuid4())
+                pending_downloads[file_id] = text
+                
+                # Create download options keyboard
+                keyboard = InlineKeyboardMarkup([
+                    [
+                        InlineKeyboardButton(
+                            "⚡️ Quick Download", 
+                            callback_data=f"default|{file_id}"
+                        ),
+                        InlineKeyboardButton(
+                            "✏️ Custom Name", 
+                            callback_data=f"rename|{file_id}"
+                        )
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            "❌ Cancel", 
+                            callback_data=f"cancel|{file_id}"
+                        )
+                    ]
+                ])
+                
+                # Send file info message with options
+                await send_tracked_message(
+                    client, 
+                    chat_id, 
+                    f"**🔗 URL Detected!**\n\n"
+                    f"📦 **File Size:** {humanbytes(file_size) if file_size else 'Unknown'}\n"
+                    f"📄 **Original Name:** `{original_filename}`\n"
+                    f"🎯 **Choose an option:**",
+                    user_id=user_id,
+                    reply_markup=keyboard
+                )
+            
+            except Exception as url_error:
+                logging.error(f"URL processing error: {url_error}")
+                await send_tracked_message(
+                    client, 
+                    chat_id, 
+                    f"❌ **Error processing URL**: {str(url_error)}",
+                    user_id=user_id
+                )
+            return
+        
+        # Invalid input
+        await send_tracked_message(
+            client, 
+            chat_id, 
+            "❌ **Please send me a valid direct download link or YouTube URL!**",
+            user_id=user_id
+        )
     
     except Exception as e:
         logging.error(f"Message handler error: {e}")
@@ -1031,6 +1116,76 @@ async def handle_message(client, message):
             await message.reply_text(f"❌ An error occurred: {str(e)}")
         except:
             pass
+
+@bot.on_callback_query()
+async def callback_handler(client, callback_query):
+    """
+    Handle callback queries for download options
+    """
+    try:
+        # Log the callback data for debugging
+        logging.info(f"Received callback data: {callback_query.data}")
+        
+        data = callback_query.data
+        message = callback_query.message
+        chat_id = message.chat.id
+        
+        # Always answer the callback query to prevent hanging
+        await callback_query.answer(
+            "Processing your request...",
+            show_alert=False
+        )
+        
+        # Parse callback data
+        if data.startswith("default|"):
+            # Quick download
+            file_id = data.split("|")[1]
+            url = pending_downloads.get(file_id)
+            
+            if not url:
+                await callback_query.answer("❌ Link expired. Please send the URL again.", show_alert=True)
+                return
+            
+            # Perform quick download
+            await handle_download_or_upload(client, message, url)
+        
+        elif data.startswith("rename|"):
+            # Custom name option
+            file_id = data.split("|")[1]
+            url = pending_downloads.get(file_id)
+            
+            if not url:
+                await callback_query.answer("❌ Link expired. Please send the URL again.", show_alert=True)
+                return
+            
+            # Prompt for new filename
+            await message.edit_text(
+                "✏️ **Send me the new file name**\n\n"
+                "• Send name without extension\n"
+                "• Or /cancel to abort"
+            )
+            pending_renames[chat_id] = {"url": url, "type": "direct"}
+        
+        elif data.startswith("cancel|"):
+            # Cancel download
+            file_id = data.split("|")[1]
+            
+            # Remove from pending downloads
+            pending_downloads.pop(file_id, None)
+            
+            # Update message
+            await message.edit_text("❌ **Download Cancelled**")
+        
+        else:
+            # Unknown callback data
+            await callback_query.answer("❌ Invalid button.", show_alert=True)
+    
+    except Exception as e:
+        logging.error(f"Callback Handler Error: {str(e)}")
+        try:
+            await message.edit_text(f"❌ An error occurred: {str(e)}")
+        except:
+            await callback_query.answer(f"❌ An error occurred: {str(e)}", show_alert=True)
 
 async def download_youtube(client, message, url, download_type="video"):
     """

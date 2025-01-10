@@ -32,13 +32,18 @@ os.makedirs(THUMB_LOCATION, exist_ok=True)
 
 # Define text constants
 START_TEXT = """
-👋 Hi {}, I'm a Telegram File Uploader Bot!
+👋 **Welcome {name} to URL Uploader Bot!**
 
-I can help you:
-• Upload files from direct links
-• Download YouTube videos and audio
-• Customize file names
-• And much more!
+Your Status: {status}
+Storage: {storage}
+
+I can help you upload files from various sources:
+• Direct URLs 
+• YouTube links
+• Telegram files
+
+**Features Available:**
+{features}
 
 Use /help to see all available commands.
 """
@@ -202,118 +207,66 @@ async def get_concurrent_downloads(user_id: int) -> int:
     return 5
 
 async def save_thumb(user_id: int, thumb_path: str):
-    try:
-        os.makedirs(THUMB_LOCATION, exist_ok=True)
-        
-        user_thumb_file = os.path.join(THUMB_LOCATION, f"{user_id}_thumb.txt")
-        
-        with open(user_thumb_file, 'w') as f:
-            f.write(thumb_path)
-        
-        return True
-    except Exception as e:
-        logging.error(f"Error saving thumb for user {user_id}: {str(e)}")
-        return False
-
-def get_thumb(user_id: int):
-    try:
-        user_thumb_file = os.path.join(THUMB_LOCATION, f"{user_id}_thumb.txt")
-        
-        if os.path.exists(user_thumb_file):
-            with open(user_thumb_file, 'r') as f:
-                thumb_path = f.read().strip()
-            
-            if os.path.exists(thumb_path):
-                return thumb_path
-        
-        return None
-    except Exception as e:
-        logging.error(f"Error retrieving thumb for user {user_id}: {str(e)}")
-        return None
-
-async def save_photo(client, message):
+    """
+    Save user's custom thumbnail
+    
+    :param user_id: Telegram user ID
+    :param thumb_path: Path to the thumbnail image
+    """
+    # Ensure thumb directory exists
     os.makedirs(THUMB_LOCATION, exist_ok=True)
     
-    try:
-        if not message.reply_to_message or not message.reply_to_message.photo:
-            await message.reply_text("❌ Please reply to a photo to set it as thumbnail.")
-            return
-        
-        photo = message.reply_to_message.photo
-        largest_photo = photo[-1]
-        
-        thumb_path = os.path.join(
-            THUMB_LOCATION, 
-            f"{message.from_user.id}_thumb.jpg"
-        )
-        
-        await client.download_media(
-            message.reply_to_message, 
-            file_name=thumb_path
-        )
-        
-        await save_thumb(message.from_user.id, thumb_path)
-        
-        await message.reply_text(
-            "✅ **Thumbnail saved successfully!**\n"
-            "This thumbnail will be used for your future uploads."
-        )
+    # Destination path for thumbnail
+    dest_path = os.path.join(THUMB_LOCATION, f"{user_id}.jpg")
     
+    # Copy or move the thumbnail
+    try:
+        import shutil
+        shutil.copy2(thumb_path, dest_path)
     except Exception as e:
-        logging.error(f"Error saving thumbnail: {str(e)}")
-        await message.reply_text(f"❌ Error saving thumbnail: {str(e)}")
+        logging.error(f"Error saving thumbnail: {e}")
+        raise
 
-async def get_file_size(url):
-    """Get file size from URL without downloading"""
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.head(url, allow_redirects=True) as response:
-                if response.status == 200:
-                    return int(response.headers.get('content-length', 0))
-    except Exception:
-        pass
-    return 0
+async def get_thumb(user_id: int):
+    """
+    Get user's custom thumbnail or default thumbnail
+    
+    :param user_id: Telegram user ID
+    :return: Path to thumbnail or None
+    """
+    # Check for user's custom thumbnail
+    custom_thumb_path = os.path.join(THUMB_LOCATION, f"{user_id}.jpg")
+    if os.path.exists(custom_thumb_path):
+        return custom_thumb_path
+    
+    # Check for default thumbnail
+    default_thumb_path = os.path.join(THUMB_LOCATION, "default.jpg")
+    if os.path.exists(default_thumb_path):
+        return default_thumb_path
+    
+    return None
 
-async def async_download_file(url, filename, progress=None, progress_args=None):
+async def delete_thumb(user_id: int):
     """
-    Download a file using aiohttp with progress tracking
+    Delete user's custom thumbnail
     
-    :param url: URL of the file to download
-    :param filename: Name of the file to save
-    :param progress: Optional progress callback function
-    :param progress_args: Optional arguments for progress callback
-    :return: Path to the downloaded file
+    :param user_id: Telegram user ID
     """
-    download_directory = "Download"
-    os.makedirs(download_directory, exist_ok=True)
+    thumb_path = os.path.join(THUMB_LOCATION, f"{user_id}.jpg")
     
-    file_path = os.path.join(download_directory, filename)
+    if os.path.exists(thumb_path):
+        try:
+            os.remove(thumb_path)
+            return True
+        except Exception as e:
+            logging.error(f"Error deleting thumbnail: {e}")
+            return False
     
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url) as response:
-            if response.status != 200:
-                raise Exception(f"Download failed with status {response.status}")
-            
-            total_size = int(response.headers.get('content-length', 0))
-            downloaded_size = 0
-            
-            with open(file_path, "wb") as file:
-                async for chunk in response.content.iter_chunked(1024):
-                    file.write(chunk)
-                    downloaded_size += len(chunk)
-                    
-                    # Call progress callback if provided
-                    if progress and progress_args:
-                        try:
-                            await progress(downloaded_size, total_size, *progress_args)
-                        except Exception as e:
-                            logging.error(f"Progress callback error: {e}")
-    
-    return file_path
+    return False
 
 async def send_file_with_thumbnail(client, chat_id, document, file_name, caption, progress, progress_args):
     """Send file with user's thumbnail if available"""
-    thumb = get_thumb(chat_id)
+    thumb = await get_thumb(chat_id)
     start_time = time.time()
     
     try:
@@ -541,6 +494,7 @@ async def start_command(client, message: Message):
     await client.send_message(
         chat_id=message.chat.id,
         text=START_TEXT.format(
+            name=message.from_user.first_name,
             status=status,
             storage=storage,
             features=features
@@ -1073,3 +1027,40 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+@bot.on_message(filters.command(["thumb"]) & filters.private)
+async def save_thumbnail(client, message: Message):
+    """
+    Handle thumbnail saving command
+    """
+    if not message.reply_to_message or not message.reply_to_message.photo:
+        await message.reply_text("❌ Please reply to a photo to set as thumbnail.")
+        return
+    
+    try:
+        # Download the photo
+        thumb = await client.download_media(message.reply_to_message.photo)
+        
+        # Save the thumbnail
+        await save_thumb(message.from_user.id, thumb)
+        
+        # Remove temporary downloaded file
+        os.remove(thumb)
+        
+        await message.reply_text("✅ Thumbnail saved successfully!")
+    
+    except Exception as e:
+        logging.error(f"Thumbnail save error: {e}")
+        await message.reply_text("❌ Failed to save thumbnail. Please try again.")
+
+@bot.on_message(filters.command(["delthumb"]) & filters.private)
+async def delete_thumbnail(client, message: Message):
+    """
+    Handle thumbnail deletion command
+    """
+    result = await delete_thumb(message.from_user.id)
+    
+    if result:
+        await message.reply_text("✅ Thumbnail deleted successfully!")
+    else:
+        await message.reply_text("❌ No custom thumbnail found.")

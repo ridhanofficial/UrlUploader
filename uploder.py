@@ -17,9 +17,11 @@ import aiohttp
 # Import config variables directly
 from config import (
     API_ID, API_HASH, BOT_TOKEN, SESSION_STRING, 
-    OWNER_ID, MAX_FILE_SIZE, DOWNLOAD_LOCATION,
-    THUMB_LOCATION
+    OWNER_ID, MAX_FILE_SIZE, DOWNLOAD_LOCATION
 )
+
+# Define thumbnail location
+THUMB_LOCATION = os.path.join(os.path.dirname(os.path.abspath(__file__)), "thumb")
 
 # Utility functions
 from plugins.utils import get_filename, get_file_size, file_size_format

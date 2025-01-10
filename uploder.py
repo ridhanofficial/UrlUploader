@@ -9,6 +9,7 @@ from pyrogram.enums import ParseMode
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message
 import math
+import yt_dlp
 
 from plugins.utils import (
     async_download_file,
@@ -47,16 +48,83 @@ user = Client(
     workers=2  # Reduced workers to prevent overload
 )
 
-pending_renames = {}
+# Constants and storage
 pending_downloads = {}
+pending_renames = {}
+URL_REGEX = r'https?://[^\s<>"]+|www\.[^\s<>"]+'
+YOUTUBE_REGEX = r'(?:https?://)?(?:www\.)?(?:youtube\.com/watch\?v=|youtu\.be/|youtube\.com/shorts/)([a-zA-Z0-9_-]+)'
 
-URL_REGEX = r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+'
-YOUTUBE_REGEX = r'(https?://)?(www\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/.+'
+async def extract_youtube_info(url):
+    """Extract info from YouTube URL"""
+    ydl_opts = {
+        'format': 'best',  # Best quality
+        'noplaylist': True,  # Only download single video
+        'quiet': True,
+        'no_warnings': True,
+    }
+    
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            formats = info.get('formats', [])
+            
+            # Get best quality that's under size limit
+            for f in formats:
+                if f.get('filesize', 0) < MAX_FILE_SIZE:
+                    return {
+                        'url': f['url'],
+                        'title': info.get('title', 'video'),
+                        'thumbnail': info.get('thumbnail'),
+                        'duration': info.get('duration'),
+                        'filesize': f.get('filesize', 0)
+                    }
+            
+            return None
+    except Exception as e:
+        print(f"YouTube extraction error: {str(e)}")
+        return None
 
-THUMB_LOCATION = "./THUMBNAILS"
-
-# Override max file size to 2GB
-MAX_FILE_SIZE = 2 * 1024 * 1024 * 1024  # 2GB in bytes
+async def process_youtube(client, message, url):
+    """Process YouTube URL"""
+    try:
+        progress_msg = await message.reply_text("🎥 **Processing YouTube Link...**")
+        
+        # Extract info
+        info = await extract_youtube_info(url)
+        if not info:
+            await progress_msg.edit_text("❌ **Failed to process YouTube video**\n\nMake sure the video exists and is not too large.")
+            return
+            
+        # Check file size
+        if info['filesize'] > MAX_FILE_SIZE:
+            await progress_msg.edit_text(
+                f"❌ **Video size ({humanbytes(info['filesize'])}) is too large!**\n\n"
+                f"Maximum allowed size is 2GB ({humanbytes(MAX_FILE_SIZE)})"
+            )
+            return
+            
+        # Show download options
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("⚡️ Quick Download", callback_data=f"ytdl|{url}|default"),
+                InlineKeyboardButton("✏️ Custom Name", callback_data=f"ytdl|{url}|rename")
+            ],
+            [
+                InlineKeyboardButton("❌ Cancel", callback_data="cancel")
+            ]
+        ])
+        
+        await progress_msg.edit_text(
+            f"🎥 **YouTube Video Found!**\n\n"
+            f"📝 **Title:** {info['title']}\n"
+            f"⏱ **Duration:** {TimeFormatter(info['duration'] * 1000) if info['duration'] else 'N/A'}\n"
+            f"📦 **Size:** {humanbytes(info['filesize'])}\n\n"
+            "**Choose an option:**",
+            reply_markup=keyboard
+        )
+        
+    except Exception as e:
+        await message.reply_text(f"❌ **Error processing YouTube link:**\n\n`{str(e)}`")
 
 async def get_max_file_size(user_id: int) -> int:
     return MAX_FILE_SIZE
@@ -240,70 +308,6 @@ async def send_file_with_thumbnail(client, chat_id, document, file_name, caption
             pass
         raise e
 
-START_TEXT = """
-✨ **Welcome to URL Uploader Bot** ✨
-
-I can help you download files from direct links and upload them to Telegram.
-
-**Features:**
-• 📥 Upload files up to 4GB
-• 🎥 Support for YouTube links
-• ⚡️ Fast downloads
-• 📝 Custom file renaming
-• 📊 Real-time progress tracking
-
-**Commands:**
-• /start - Start the bot
-• /help - Get detailed help
-• /about - About the bot
-
-🔰 Send me any direct download link or YouTube link to get started!
-"""
-
-HELP_TEXT = """
-📚 **URL Uploader Help**
-
-**How to use:**
-1. Send me any direct download link or YouTube link
-2. Choose download options:
-   • ⚡️ Quick Download - Original filename
-   • ✏️ Custom Name - Rename before upload
-   • ❌ Cancel - Cancel the process
-
-**Supported Links:**
-• Direct download URLs (Up to 4GB)
-• YouTube video links
-• Google Drive links (soon)
-
-**Features:**
-• 🚀 Fast processing
-• 📊 Progress updates
-• 🎯 Error reporting
-• 💫 Beautiful interface
-
-Need help? Contact @{OWNER_ID}
-"""
-
-ABOUT_TEXT = """
-✨ **URL Uploader Bot**
-
-**Version:** 2.0
-**Last Updated:** 2025
-
-🛠 **Developed with:**
-• Python 3.9
-• Pyrogram 2.0
-
-📊 **Server Status:**
-• Online: ✅
-• Processing Speed: ⚡️
-• Server Load: Optimal
-
-Thanks for using our Bot!
-
-©️ 2025 All Rights Reserved
-"""
-
 # Create required directories
 os.makedirs(DOWNLOAD_LOCATION, exist_ok=True)
 os.makedirs(THUMB_LOCATION, exist_ok=True)
@@ -413,57 +417,137 @@ async def handle_message(client, message):
     text = message.text
     chat_id = message.chat.id
     
-    if not re.match(URL_REGEX, text):
-        if text in pending_renames:
-            # Handle rename logic...
-            pass
+    if text.startswith("/"):
+        return  # Let command handlers handle commands
+        
+    # Check if this is a rename request
+    if chat_id in pending_renames:
+        if text.lower() == "/cancel":
+            pending_renames.pop(chat_id)
+            await message.reply_text("❌ Process Cancelled")
+            return
+            
+        rename_info = pending_renames.pop(chat_id)
+        if rename_info.get("type") == "youtube":
+            # Handle YouTube rename
+            await download_youtube(client, message, rename_info["url"], text)
         else:
-            await message.reply_text("❌ **Please send me a valid direct download link!**")
+            # Handle normal file rename
+            await handle_download(client, message, rename_info["url"], text)
         return
         
-    url = text
+    # Check if URL is YouTube
+    if re.match(YOUTUBE_REGEX, text):
+        await process_youtube(client, message, text)
+    elif re.match(URL_REGEX, text):
+        # Handle normal URL download
+        file_id = str(uuid.uuid4())
+        pending_downloads[file_id] = text
+        
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("⚡️ Quick Download", callback_data=f"default|{file_id}"),
+                InlineKeyboardButton("✏️ Custom Name", callback_data=f"rename|{file_id}")
+            ],
+            [
+                InlineKeyboardButton("❌ Cancel", callback_data=f"cancel|{file_id}")
+            ]
+        ])
+        
+        await message.reply_text(
+            "🔗 **URL Detected!**\n\n"
+            "Choose an option:",
+            reply_markup=keyboard
+        )
+    else:
+        await message.reply_text("❌ **Please send me a valid direct download link or YouTube URL!**")
+
+@bot.on_callback_query()
+async def callback_handler(client, callback_query):
+    data = callback_query.data
+    message = callback_query.message
     
     try:
-        # Delete previous messages
-        await message.delete()
-    except Exception:
-        pass
-        
+        if data.startswith("ytdl|"):
+            # Handle YouTube download
+            _, url, action = data.split("|")
+            
+            if action == "default":
+                await message.edit_text("⚡ **Starting YouTube Download...**")
+                await download_youtube(client, message, url)
+            elif action == "rename":
+                await message.edit_text(
+                    "✏️ **Send me the new file name**\n\n"
+                    "• No need to add extension\n"
+                    "• Send /cancel to cancel"
+                )
+                pending_renames[message.chat.id] = {"type": "youtube", "url": url}
+                
+        elif data == "cancel":
+            await message.edit_text("❌ **Process Cancelled**")
+            
+        elif data.startswith(("default|", "rename|", "cancel|")):
+            action, file_id = data.split("|")
+            
+            if action == "cancel":
+                await message.edit_text("❌ **Download Cancelled**")
+                return
+                
+            if action == "default":
+                # Handle direct download
+                await message.edit_text("⚡ **Starting Download...**")
+                await handle_download(client, message, file_id, custom_name=None)
+                
+            elif action == "rename":
+                # Ask for new name
+                await message.edit_text(
+                    "✏️ **Send me the new file name**\n\n"
+                    "• Send /cancel to cancel the process"
+                )
+                # Store the file ID for renaming
+                pending_renames[message.chat.id] = file_id
+    
+    except Exception as e:
+        print(f"Callback Error: {str(e)}")
+    finally:
+        # Always answer the callback query to remove loading state
+        await callback_query.answer()
+
+async def handle_download(client, message, file_id, custom_name=None):
+    """Handle file download and upload"""
     try:
+        url = pending_downloads.get(file_id)
+        if not url:
+            await message.edit_text("❌ **Download expired. Please send the URL again.**")
+            return
+            
         # Send initial progress message
-        progress_msg = await client.send_message(
-            chat_id=chat_id,
-            text="**🔄 Checking file size...**"
-        )
+        progress_msg = await message.edit_text("**🔄 Checking file size...**")
         
-        # Check file size first
+        # Check file size
         file_size = await get_file_size(url)
         if file_size > MAX_FILE_SIZE:
-            await progress_msg.edit(
+            await progress_msg.edit_text(
                 f"❌ **File size ({humanbytes(file_size)}) is too large!**\n\n"
                 f"Maximum allowed size is 2GB ({humanbytes(MAX_FILE_SIZE)})"
             )
             return
-        elif file_size == 0:
-            await progress_msg.edit("⚠️ **Couldn't determine file size, attempting download...**")
-        else:
-            await progress_msg.edit(f"**🔄 Starting download...**\n\nFile size: {humanbytes(file_size)}")
+            
+        # Get filename
+        filename = custom_name if custom_name else await get_filename(url)
         
-        # Start download
-        filename = await get_filename(url)
-        start_time = time.time()
-        
+        # Download file
         downloaded_file = await async_download_file(
             url,
             filename,
             progress=progress_for_pyrogram,
-            progress_args=(progress_msg, start_time)
+            progress_args=(progress_msg, time.time())
         )
         
         # Upload file
         await send_file_with_thumbnail(
             client,
-            chat_id,
+            message.chat.id,
             downloaded_file,
             filename,
             f"📤 **Upload Complete!**\n\n**Filename:** `{filename}`",
@@ -478,15 +562,72 @@ async def handle_message(client, message):
             pass
             
     except Exception as e:
-        error_msg = str(e)
-        try:
-            await progress_msg.edit(f"**❌ Download Failed!**\n\n`{error_msg}`")
-        except Exception:
-            await client.send_message(chat_id, f"**❌ Download Failed!**\n\n`{error_msg}`")
+        await message.edit_text(f"**❌ Download Failed!**\n\n`{str(e)}`")
+    finally:
+        if file_id in pending_downloads:
+            del pending_downloads[file_id]
 
-@bot.on_callback_query()
-async def callback_handler(client, callback_query):
-    await callback_query_handler(client, callback_query)
+async def download_youtube(client, message, url, custom_name=None):
+    """Download and upload YouTube video"""
+    try:
+        # Get video info
+        info = await extract_youtube_info(url)
+        if not info:
+            await message.edit_text("❌ **Failed to process YouTube video**")
+            return
+            
+        # Get filename
+        filename = f"{custom_name or info['title']}.mp4"
+        filename = re.sub(r'[<>:"/\\|?*]', '', filename)  # Remove invalid chars
+        
+        # Download progress
+        progress_msg = await message.edit_text("📥 **Downloading video...**")
+        
+        # Download video
+        async with aiohttp.ClientSession() as session:
+            async with session.get(info['url']) as response:
+                if response.status == 200:
+                    total_size = int(response.headers.get('content-length', 0))
+                    
+                    with open(filename, 'wb') as f:
+                        downloaded = 0
+                        start_time = time.time()
+                        
+                        async for chunk in response.content.iter_chunked(1024*1024):
+                            if chunk:
+                                f.write(chunk)
+                                downloaded += len(chunk)
+                                await progress_for_pyrogram(
+                                    downloaded,
+                                    total_size,
+                                    "📥 Downloading",
+                                    progress_msg,
+                                    start_time
+                                )
+                    
+                    # Upload file
+                    await send_file_with_thumbnail(
+                        client,
+                        message.chat.id,
+                        filename,
+                        filename,
+                        f"📤 **Upload Complete!**\n\n"
+                        f"🎥 **Title:** `{info['title']}`\n"
+                        f"⏱ **Duration:** {TimeFormatter(info['duration'] * 1000) if info['duration'] else 'N/A'}",
+                        progress_for_pyrogram,
+                        (progress_msg, time.time())
+                    )
+                    
+                    # Cleanup
+                    try:
+                        os.remove(filename)
+                    except Exception:
+                        pass
+                else:
+                    await message.edit_text("❌ **Failed to download video**")
+                    
+    except Exception as e:
+        await message.edit_text(f"❌ **Download Failed!**\n\n`{str(e)}`")
 
 async def start():
     """Start both bot and user client"""

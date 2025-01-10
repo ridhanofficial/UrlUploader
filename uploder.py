@@ -55,8 +55,8 @@ YOUTUBE_REGEX = r'(https?://)?(www\.)?(youtube|youtu|youtube-nocookie)\.(com|be)
 
 THUMB_LOCATION = "./THUMBNAILS"
 
-# Constants
-MAX_FILE_SIZE = 4 * 1024 * 1024 * 1024  # 4GB
+# Override max file size to 2GB
+MAX_FILE_SIZE = 2 * 1024 * 1024 * 1024  # 2GB in bytes
 
 async def get_max_file_size(user_id: int) -> int:
     return MAX_FILE_SIZE
@@ -410,7 +410,79 @@ async def broadcast_message(client, message):
 
 @bot.on_message(filters.private & filters.text)
 async def handle_message(client, message):
-    await message_handler(client, message)
+    text = message.text
+    chat_id = message.chat.id
+    
+    if not re.match(URL_REGEX, text):
+        if text in pending_renames:
+            # Handle rename logic...
+            pass
+        else:
+            await message.reply_text("❌ **Please send me a valid direct download link!**")
+        return
+        
+    url = text
+    
+    try:
+        # Delete previous messages
+        await message.delete()
+    except Exception:
+        pass
+        
+    try:
+        # Send initial progress message
+        progress_msg = await client.send_message(
+            chat_id=chat_id,
+            text="**🔄 Checking file size...**"
+        )
+        
+        # Check file size first
+        file_size = await get_file_size(url)
+        if file_size > MAX_FILE_SIZE:
+            await progress_msg.edit(
+                f"❌ **File size ({humanbytes(file_size)}) is too large!**\n\n"
+                f"Maximum allowed size is 2GB ({humanbytes(MAX_FILE_SIZE)})"
+            )
+            return
+        elif file_size == 0:
+            await progress_msg.edit("⚠️ **Couldn't determine file size, attempting download...**")
+        else:
+            await progress_msg.edit(f"**🔄 Starting download...**\n\nFile size: {humanbytes(file_size)}")
+        
+        # Start download
+        filename = await get_filename(url)
+        start_time = time.time()
+        
+        downloaded_file = await async_download_file(
+            url,
+            filename,
+            progress=progress_for_pyrogram,
+            progress_args=(progress_msg, start_time)
+        )
+        
+        # Upload file
+        await send_file_with_thumbnail(
+            client,
+            chat_id,
+            downloaded_file,
+            filename,
+            f"📤 **Upload Complete!**\n\n**Filename:** `{filename}`",
+            progress_for_pyrogram,
+            (progress_msg, time.time())
+        )
+        
+        # Cleanup
+        try:
+            os.remove(downloaded_file)
+        except Exception:
+            pass
+            
+    except Exception as e:
+        error_msg = str(e)
+        try:
+            await progress_msg.edit(f"**❌ Download Failed!**\n\n`{error_msg}`")
+        except Exception:
+            await client.send_message(chat_id, f"**❌ Download Failed!**\n\n`{error_msg}`")
 
 @bot.on_callback_query()
 async def callback_handler(client, callback_query):
@@ -421,7 +493,17 @@ async def start():
     await bot.start()
     await user.start()
     print("Bot started successfully!")
-    await bot.idle()
+    
+    # Keep the bot running
+    while True:
+        await asyncio.sleep(1)
 
 if __name__ == "__main__":
-    asyncio.run(start())
+    try:
+        asyncio.run(start())
+    except KeyboardInterrupt:
+        print("Bot stopped!")
+    finally:
+        # Clean up
+        asyncio.run(bot.stop())
+        asyncio.run(user.stop())

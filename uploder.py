@@ -8,6 +8,7 @@ import aiohttp
 from pyrogram.enums import ParseMode
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message
+import math
 
 from plugins.utils import (
     async_download_file,
@@ -50,9 +51,8 @@ YOUTUBE_REGEX = r'(https?://)?(www\.)?(youtube|youtu|youtube-nocookie)\.(com|be)
 
 THUMB_LOCATION = "./THUMBNAILS"
 
-# Create required directories
-os.makedirs(DOWNLOAD_LOCATION, exist_ok=True)
-os.makedirs(THUMB_LOCATION, exist_ok=True)
+# Constants
+FORCE_SUB_CHANNEL = "@RSforeverBots"
 
 async def get_max_file_size(user_id: int) -> int:
     return MAX_FILE_SIZE
@@ -91,6 +91,33 @@ def delete_thumb(user_id: int):
     except Exception as e:
         logging.error(f"Error deleting thumbnail: {str(e)}")
     return False
+
+async def force_sub(client, message: Message):
+    """Check if user has joined the channel"""
+    try:
+        user_id = message.from_user.id
+        if FORCE_SUB_CHANNEL.startswith("@"):
+            channel = FORCE_SUB_CHANNEL
+        else:
+            channel = "@" + FORCE_SUB_CHANNEL
+            
+        try:
+            await client.get_chat_member(channel, user_id)
+            return True
+        except UserNotParticipant:
+            buttons = [[
+                InlineKeyboardButton("🔔 Join Channel", url=f"https://t.me/{channel.replace('@', '')}")
+            ]]
+            await message.reply_text(
+                f"**❗️ You must join our channel to use this bot!**\n\n"
+                f"Please join @{channel.replace('@', '')} and try again.",
+                reply_markup=InlineKeyboardMarkup(buttons),
+                quote=True
+            )
+            return False
+    except Exception as e:
+        logging.error(f"Force sub error: {str(e)}")
+        return True
 
 START_TEXT = """
 ✨ **Welcome to URL Uploader Bot** ✨
@@ -156,9 +183,143 @@ Thanks for using our Bot!
 ©️ 2025 All Rights Reserved
 """
 
+# Create required directories
+os.makedirs(DOWNLOAD_LOCATION, exist_ok=True)
+os.makedirs(THUMB_LOCATION, exist_ok=True)
+
+# Progress callback function
+async def progress_for_pyrogram(current, total, ud_type, message, start):
+    now = time.time()
+    diff = now - start
+    
+    if round(diff % 10.00) == 0 or current == total:
+        percentage = current * 100 / total
+        speed = current / diff
+        elapsed_time = round(diff) * 1000
+        time_to_completion = round((total - current) / speed) * 1000
+        estimated_total_time = elapsed_time + time_to_completion
+
+        elapsed_time = TimeFormatter(milliseconds=elapsed_time)
+        estimated_total_time = TimeFormatter(milliseconds=estimated_total_time)
+
+        progress = "[{0}{1}] \nP: {2}%\n".format(
+            ''.join(["█" for _ in range(math.floor(percentage / 5))]),
+            ''.join(["░" for _ in range(20 - math.floor(percentage / 5))]),
+            round(percentage, 2))
+
+        tmp = progress + "{0} of {1}\nSpeed: {2}/s\nETA: {3}\n".format(
+            humanbytes(current),
+            humanbytes(total),
+            humanbytes(speed),
+            estimated_total_time if estimated_total_time != '' else "0 s"
+        )
+        try:
+            await message.edit(
+                text=f"{ud_type}\n {tmp}",
+                parse_mode=ParseMode.MARKDOWN
+            )
+        except Exception:
+            pass
+
+def humanbytes(size):
+    if not size:
+        return ""
+    power = 2**10
+    n = 0
+    Dic_powerN = {0: ' ', 1: 'Ki', 2: 'Mi', 3: 'Gi', 4: 'Ti'}
+    while size > power:
+        size /= power
+        n += 1
+    return str(round(size, 2)) + " " + Dic_powerN[n] + 'B'
+
+def TimeFormatter(milliseconds: int) -> str:
+    seconds, milliseconds = divmod(int(milliseconds), 1000)
+    minutes, seconds = divmod(seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    days, hours = divmod(hours, 24)
+    tmp = ((str(days) + "d, ") if days else "") + \
+        ((str(hours) + "h, ") if hours else "") + \
+        ((str(minutes) + "m, ") if minutes else "") + \
+        ((str(seconds) + "s, ") if seconds else "") + \
+        ((str(milliseconds) + "ms, ") if milliseconds else "")
+    return tmp[:-2]
+
+# Update the download handlers to use the correct progress callback
+async def async_download_file(url, filename, progress=None, progress_args=None):
+    """Download file using aiohttp"""
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as response:
+                if response.status != 200:
+                    raise Exception(f"Failed to download: HTTP {response.status}")
+                
+                file_size = int(response.headers.get('content-length', 0))
+                downloaded = 0
+                start_time = time.time()
+                
+                with open(filename, 'wb') as f:
+                    async for chunk in response.content.iter_chunked(1024):
+                        if chunk:
+                            f.write(chunk)
+                            downloaded += len(chunk)
+                            if progress:
+                                try:
+                                    await progress(
+                                        downloaded,
+                                        file_size,
+                                        "📥 Downloading",
+                                        progress_args[0],
+                                        start_time
+                                    )
+                                except Exception:
+                                    pass
+                
+                return filename
+    except Exception as e:
+        if os.path.exists(filename):
+            os.remove(filename)
+        raise e
+
+# Update send_file_with_thumbnail function
+async def send_file_with_thumbnail(client, chat_id, document, file_name, caption, progress, progress_args):
+    """Send file with user's thumbnail if available"""
+    thumb = get_thumb(chat_id)
+    start_time = time.time()
+    try:
+        await client.send_document(
+            chat_id=chat_id,
+            document=document,
+            thumb=thumb,
+            file_name=file_name,
+            caption=caption,
+            progress=progress,
+            progress_args=(
+                "📤 Uploading",
+                progress_args[0],
+                start_time
+            )
+        )
+    except Exception as e:
+        # If sending with thumbnail fails, try without it
+        await client.send_document(
+            chat_id=chat_id,
+            document=document,
+            file_name=file_name,
+            caption=caption,
+            progress=progress,
+            progress_args=(
+                "📤 Uploading",
+                progress_args[0],
+                start_time
+            )
+        )
+
 # Command handlers
 @bot.on_message(filters.command(["start"]) & filters.private)
 async def start_command(client, message: Message):
+    if not await force_sub(client, message):
+        return
+    
     chat_id = message.chat.id
     
     keyboard = InlineKeyboardMarkup([
@@ -167,7 +328,7 @@ async def start_command(client, message: Message):
             InlineKeyboardButton("📊 About", callback_data="about")
         ],
         [
-            InlineKeyboardButton("🌟 Channel", url="https://t.me/your_channel"),
+            InlineKeyboardButton("🌟 Channel", url=f"https://t.me/{FORCE_SUB_CHANNEL.replace('@', '')}"),
             InlineKeyboardButton("💫 Support", url="https://t.me/your_support")
         ]
     ])
@@ -180,6 +341,9 @@ async def start_command(client, message: Message):
 
 @bot.on_message(filters.command(["help"]) & filters.private)
 async def help_command(client, message: Message):
+    if not await force_sub(client, message):
+        return
+        
     keyboard = InlineKeyboardMarkup([
         [
             InlineKeyboardButton("🏠 Back to Start", callback_data="start"),
@@ -195,6 +359,9 @@ async def help_command(client, message: Message):
 
 @bot.on_message(filters.command(["about"]) & filters.private)
 async def about_command(client, message: Message):
+    if not await force_sub(client, message):
+        return
+        
     keyboard = InlineKeyboardMarkup([
         [
             InlineKeyboardButton("🏠 Back to Start", callback_data="start"),
@@ -221,7 +388,7 @@ async def callback_handler(client, callback_query):
                 InlineKeyboardButton("📊 About", callback_data="about")
             ],
             [
-                InlineKeyboardButton("🌟 Channel", url="https://t.me/your_channel"),
+                InlineKeyboardButton("🌟 Channel", url=f"https://t.me/{FORCE_SUB_CHANNEL.replace('@', '')}"),
                 InlineKeyboardButton("💫 Support", url="https://t.me/your_support")
             ]
         ])
@@ -317,7 +484,7 @@ async def callback_handler(client, callback_query):
                     url,
                     filename,
                     progress=progress_for_pyrogram,
-                    progress_args=progressArgs("📥 Downloading Progress", editable_text, start_time)
+                    progress_args=(editable_text, start_time)
                 )
                 
                 upload_start_time = time.time()
@@ -328,7 +495,7 @@ async def callback_handler(client, callback_query):
                     filename,
                     f"📤 **Upload Complete!**\n\n**Filename:** `{filename}`",
                     progress_for_pyrogram,
-                    progressArgs("📤 Uploading Progress", editable_text, upload_start_time)
+                    (editable_text, upload_start_time)
                 )
                 
                 await editable_text.delete()
@@ -365,6 +532,9 @@ async def callback_handler(client, callback_query):
 # Handle text messages (URLs and rename requests)
 @bot.on_message(filters.text & filters.private & ~filters.command("start") & ~filters.command("help") & ~filters.command("about"))
 async def handle_message(client, message: Message):
+    if not await force_sub(client, message):
+        return
+        
     text = message.text.strip()
     chat_id = message.chat.id
     
@@ -404,7 +574,7 @@ async def handle_message(client, message: Message):
                 url,
                 new_name_with_ext,
                 progress=progress_for_pyrogram,
-                progress_args=progressArgs("📥 Downloading Progress", status_msg, start_time)
+                progress_args=(status_msg, start_time)
             )
             
             # Start upload process
@@ -416,7 +586,7 @@ async def handle_message(client, message: Message):
                 new_name_with_ext,
                 f"📤 **Upload Complete!**\n\n**Filename:** `{new_name_with_ext}`",
                 progress_for_pyrogram,
-                progressArgs("📤 Uploading Progress", status_msg, upload_start_time)
+                (status_msg, upload_start_time)
             )
             
             # Cleanup
@@ -473,34 +643,6 @@ async def handle_message(client, message: Message):
             if unique_id in pending_downloads:
                 pending_downloads.pop(unique_id)
 
-async def progress_text(current, total, start_time):
-    now = time.time()
-    diff = now - start_time
-    
-    if diff < 1:
-        return ""
-    
-    speed = current / diff
-    speed_text = file_size_format(speed) + "/s"
-    
-    percentage = (current * 100) / total
-    
-    bar_length = 10
-    current_bar = int(percentage / (100 / bar_length))
-    bar = "▰" * current_bar + "▱" * (bar_length - current_bar)
-    
-    text = (
-        f"**📊 Progress Status**\n\n"
-        f"**{bar}** `{percentage:.1f}%`\n\n"
-        f"**⚡️ Speed:** {speed_text}\n"
-        f"**📦 Size:** {file_size_format(current)} / {file_size_format(total)}\n"
-    )
-    
-    return text
-
-def progress_for_pyrogram(current, total):
-    return progress_text(current, total, time.time())
-
 @bot.on_message(filters.photo & filters.incoming & filters.private)
 async def save_photo(client, message):
     download_location = f"{DOWNLOAD_LOCATION}/{message.from_user.id}.jpg"
@@ -509,6 +651,9 @@ async def save_photo(client, message):
 
 @bot.on_message(filters.command("thumb") & filters.incoming & filters.private)
 async def handle_thumb_command(client, message: Message):
+    if not await force_sub(client, message):
+        return
+        
     user_id = message.from_user.id
     
     if message.reply_to_message and message.reply_to_message.photo:
@@ -558,36 +703,15 @@ async def handle_thumb_command(client, message: Message):
 
 @bot.on_message(filters.command("delthumb") & filters.incoming & filters.private)
 async def handle_delthumb_command(client, message: Message):
+    if not await force_sub(client, message):
+        return
+        
     user_id = message.from_user.id
     
     if delete_thumb(user_id):
         await message.reply_text("**✅ Custom thumbnail deleted successfully!**")
     else:
         await message.reply_text("**❌ No thumbnail found to delete**")
-
-async def send_file_with_thumbnail(client, chat_id, document, file_name, caption, progress, progress_args):
-    """Send file with user's thumbnail if available"""
-    thumb = get_thumb(chat_id)
-    try:
-        await client.send_document(
-            chat_id=chat_id,
-            document=document,
-            thumb=thumb,
-            file_name=file_name,
-            caption=caption,
-            progress=progress,
-            progress_args=progress_args
-        )
-    except Exception as e:
-        # If sending with thumbnail fails, try without it
-        await client.send_document(
-            chat_id=chat_id,
-            document=document,
-            file_name=file_name,
-            caption=caption,
-            progress=progress,
-            progress_args=progress_args
-        )
 
 @bot.on_message(filters.command("broadcast") & filters.user(OWNER_ID))
 async def broadcast_message(client, message: Message):

@@ -23,6 +23,7 @@ from pyrogram.enums import ParseMode
 
 import yt_dlp
 import aiohttp
+import aiofiles
 
 # Import config variables directly
 from config import (
@@ -380,10 +381,14 @@ async def handle_download_or_upload(
         # Sanitize filename
         filename = re.sub(r'[^\w\-_\. ]', '_', filename)
         
+        # Ensure filename has an extension
+        if '.' not in filename:
+            filename += '.bin'  # Default extension if none exists
+        
         try:
             # Attempt to get file size
             async with aiohttp.ClientSession() as session:
-                async with session.head(url) as response:
+                async with session.head(url, allow_redirects=True) as response:
                     file_size = int(response.headers.get('Content-Length', 0))
         except Exception:
             file_size = 0
@@ -418,29 +423,61 @@ async def handle_download_or_upload(
             try:
                 await progress_msg.edit_text("📤 **Uploading File**...")
                 
+                # Get file size for upload progress
+                upload_file_size = os.path.getsize(downloaded_file)
+                
+                # Determine file type for sending
+                file_extension = os.path.splitext(downloaded_file)[1].lower()
+                
                 # Upload with progress tracking
-                await client.send_document(
-                    chat_id=message.chat.id,
-                    document=downloaded_file,
-                    caption=f"📤 **Upload Complete!**\n\n**Filename:** `{os.path.basename(downloaded_file)}`",
-                    progress=progress_for_pyrogram,
-                    progress_args=(progress_msg, start_time, os.path.basename(downloaded_file), file_size)
-                )
-                
-                # Delete the progress message
-                await progress_msg.delete()
-                
-                # Clean up the downloaded file
                 try:
-                    os.remove(downloaded_file)
-                except Exception as cleanup_error:
-                    logging.error(f"File cleanup error: {cleanup_error}")
+                    if file_extension in ['.mp4', '.avi', '.mkv', '.mov', '.webm']:
+                        # Video file
+                        sent_file = await client.send_video(
+                            chat_id=message.chat.id,
+                            video=downloaded_file,
+                            caption=f"📤 **Upload Complete!**\n\n**Filename:** `{os.path.basename(downloaded_file)}`",
+                            progress=progress_for_pyrogram,
+                            progress_args=(progress_msg, start_time, os.path.basename(downloaded_file), upload_file_size, "upload")
+                        )
+                    elif file_extension in ['.mp3', '.wav', '.flac', '.ogg']:
+                        # Audio file
+                        sent_file = await client.send_audio(
+                            chat_id=message.chat.id,
+                            audio=downloaded_file,
+                            caption=f"📤 **Upload Complete!**\n\n**Filename:** `{os.path.basename(downloaded_file)}`",
+                            progress=progress_for_pyrogram,
+                            progress_args=(progress_msg, start_time, os.path.basename(downloaded_file), upload_file_size, "upload")
+                        )
+                    else:
+                        # Generic document
+                        sent_file = await client.send_document(
+                            chat_id=message.chat.id,
+                            document=downloaded_file,
+                            caption=f"📤 **Upload Complete!**\n\n**Filename:** `{os.path.basename(downloaded_file)}`",
+                            progress=progress_for_pyrogram,
+                            progress_args=(progress_msg, start_time, os.path.basename(downloaded_file), upload_file_size, "upload")
+                        )
+                    
+                    # Delete the progress message
+                    await progress_msg.delete()
+                    
+                    # Clean up the downloaded file
+                    try:
+                        os.remove(downloaded_file)
+                    except Exception as cleanup_error:
+                        logging.error(f"File cleanup error: {cleanup_error}")
+                    
+                    return downloaded_file
                 
-                return downloaded_file
+                except Exception as send_error:
+                    logging.error(f"File Send Error: {send_error}")
+                    await progress_msg.edit_text(f"❌ **Upload Failed**: {str(send_error)}")
+                    return None
             
             except Exception as upload_error:
-                logging.error(f"Upload Error: {upload_error}")
-                await progress_msg.edit_text(f"❌ **Upload Failed**: {str(upload_error)}")
+                logging.error(f"Upload Preparation Error: {upload_error}")
+                await progress_msg.edit_text(f"❌ **Upload Preparation Failed**: {str(upload_error)}")
                 return None
         
         except Exception as download_error:
@@ -464,7 +501,7 @@ async def download_file(
     file_size
 ):
     """
-    Download a file from a direct URL
+    Download a file from a direct URL with enhanced reliability
     
     :param url: Direct download URL
     :param filename: Name to save the file as
@@ -480,30 +517,51 @@ async def download_file(
         # Full path for the file
         file_path = os.path.join('downloads', filename)
         
-        # Download the file
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url) as response:
-                if response.status != 200:
-                    await progress_msg.edit_text(f"❌ **Download Failed**: HTTP {response.status}")
-                    return None
-                
-                # Open file for writing
-                with open(file_path, 'wb') as f:
-                    downloaded = 0
-                    async for chunk in response.content.iter_chunked(1024):
-                        f.write(chunk)
-                        downloaded += len(chunk)
-                        
-                        # Update progress
-                        await progress_for_pyrogram(
-                            downloaded, 
-                            file_size, 
-                            progress_msg, 
-                            start_time, 
-                            filename
-                        )
+        # Timeout configuration
+        timeout = aiohttp.ClientTimeout(total=3600)  # 1 hour timeout
         
-        return file_path
+        # Download the file with enhanced error handling
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            try:
+                async with session.get(url, allow_redirects=True) as response:
+                    # Check response status
+                    if response.status not in [200, 206]:  # 200 OK or 206 Partial Content
+                        await progress_msg.edit_text(f"❌ **Download Failed**: HTTP {response.status}")
+                        return None
+                    
+                    # Update file size if not provided
+                    if file_size == 0:
+                        file_size = int(response.headers.get('Content-Length', 0))
+                    
+                    # Open file for writing
+                    async with aiofiles.open(file_path, 'wb') as f:
+                        downloaded = 0
+                        async for chunk in response.content.iter_chunked(64 * 1024):  # 64KB chunks
+                            await f.write(chunk)
+                            downloaded += len(chunk)
+                            
+                            # Update progress
+                            await progress_for_pyrogram(
+                                downloaded, 
+                                file_size, 
+                                progress_msg, 
+                                start_time, 
+                                filename
+                            )
+                    
+                    # Verify file size
+                    actual_size = os.path.getsize(file_path)
+                    if file_size > 0 and actual_size < file_size:
+                        await progress_msg.edit_text(f"❌ **Incomplete Download**: {actual_size}/{file_size} bytes")
+                        os.remove(file_path)
+                        return None
+                    
+                    return file_path
+            
+            except (aiohttp.ClientError, asyncio.TimeoutError) as network_error:
+                logging.error(f"Network Download Error: {network_error}")
+                await progress_msg.edit_text(f"❌ **Network Error**: {str(network_error)}")
+                return None
     
     except Exception as e:
         logging.error(f"Direct Download Error: {e}")
@@ -529,6 +587,9 @@ async def progress_for_pyrogram(
     :param upload_type: Type of operation (download/upload)
     """
     try:
+        # Ensure upload_type is a string
+        upload_type = str(upload_type).lower()
+        
         now = time.time()
         diff = now - start_time
         
@@ -957,7 +1018,13 @@ async def callback_handler(client, callback_query):
                 await callback_query.answer("❌ Link expired. Please send the URL again.", show_alert=True)
                 return
             
-            # Use the new unified download handler
+            # Delete the selection message
+            try:
+                await message.delete()
+            except Exception as delete_error:
+                logging.warning(f"Could not delete selection message: {delete_error}")
+            
+            # Perform quick download
             await handle_download_or_upload(client, message, url)
         
         elif data.startswith("rename|"):
@@ -1146,6 +1213,12 @@ async def callback_handler(client, callback_query):
                 await callback_query.answer("❌ Link expired. Please send the URL again.", show_alert=True)
                 return
             
+            # Delete the selection message
+            try:
+                await message.delete()
+            except Exception as delete_error:
+                logging.warning(f"Could not delete selection message: {delete_error}")
+            
             # Perform quick download
             await handle_download_or_upload(client, message, url)
         
@@ -1173,8 +1246,11 @@ async def callback_handler(client, callback_query):
             # Remove from pending downloads
             pending_downloads.pop(file_id, None)
             
-            # Update message
-            await message.edit_text("❌ **Download Cancelled**")
+            # Delete the selection message
+            try:
+                await message.delete()
+            except Exception as delete_error:
+                logging.warning(f"Could not delete selection message: {delete_error}")
         
         else:
             # Unknown callback data

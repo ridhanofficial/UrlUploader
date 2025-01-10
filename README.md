@@ -95,4 +95,4 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## Support
 
-For support, contact [@your_username](https://t.me/your_username)
+For support, contact [Ridhan Official](https://t.me/Ridhanofficial)

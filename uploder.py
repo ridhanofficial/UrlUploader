@@ -9,6 +9,7 @@ import math
 from pyrogram import Client, filters
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from pyrogram.errors import FloodWait
+from pyrogram.enums import ParseMode
 
 import yt_dlp
 import aiohttp
@@ -31,54 +32,37 @@ os.makedirs(THUMB_LOCATION, exist_ok=True)
 
 # Define text constants
 START_TEXT = """
-👋 Hi {first_name}, I'm a Telegram File Uploader Bot!
+Hello {first_name}! 👋
 
-Status: {status}
-Storage: {storage}
-Features: {features}
+**Status**: {status}
+**Storage**: {storage}
+**Features**: {features}
 
-I can help you:
-• Upload files from direct links
-• Download YouTube videos and audio
-• Customize file names
-• And much more!
-
-Use /help to see all available commands.
+I'm a versatile URL Uploader Bot that can help you download and upload files from various sources!
 """
 
 HELP_TEXT = """
-📥 **File Upload Commands**
-• Send me a direct link to upload a file
-• Send a YouTube link to download video/audio
+**Bot Usage Guide** 📘
 
-🎛️ **Available Features**
-• Direct file upload
-• YouTube video download
-• YouTube audio download
-• Custom file naming
-• Thumbnail support
+1. Send me a direct download link
+2. Send me a YouTube video/audio link
+3. Use inline buttons to customize download
 
-📝 **How to Use**
-1. Send a direct download link
-2. Send a YouTube video link
-3. Choose download options
-4. Customize file name if needed
-
-❓ **Need More Help?**
-Contact @your_support_username
+**Supported Sources**:
+• Direct Download Links
+• YouTube Videos
+• YouTube Audio
 """
 
 ABOUT_TEXT = """
-🤖 **Bot Details**
-• Version: 2.0
-• Language: Python
-• Library: Pyrogram
+**URL Uploader Bot** 🤖
 
-👨‍💻 **Developer**
-• @your_username
+**Version**: 2.0
+**Developer**: Your Name
+**Language**: Python
+**Library**: Pyrogram
 
-🔗 **Source Code**
-• Available on request
+A powerful Telegram bot designed to make file downloading and uploading seamless!
 """
 
 # Constants and storage
@@ -532,7 +516,7 @@ bot = Client(
     api_hash=API_HASH,
     bot_token=BOT_TOKEN,
     workers=2,  # Reduced workers to prevent overload
-    parse_mode="Markdown"
+    parse_mode=ParseMode.MARKDOWN
 )
 
 # Initialize user client for large files
@@ -593,7 +577,8 @@ async def start_command(client, message: Message):
                 features=features
             ),
             reply_markup=keyboard,
-            disable_web_page_preview=True
+            disable_web_page_preview=True,
+            parse_mode=ParseMode.MARKDOWN
         )
         
         return welcome_message
@@ -635,7 +620,8 @@ async def help_command(client, message: Message):
             chat_id=message.chat.id,
             text=HELP_TEXT,
             reply_markup=keyboard,
-            disable_web_page_preview=True
+            disable_web_page_preview=True,
+            parse_mode=ParseMode.MARKDOWN
         )
         
         return help_message
@@ -677,7 +663,8 @@ async def about_command(client, message: Message):
             chat_id=message.chat.id,
             text=ABOUT_TEXT,
             reply_markup=keyboard,
-            disable_web_page_preview=True
+            disable_web_page_preview=True,
+            parse_mode=ParseMode.MARKDOWN
         )
         
         return about_message
@@ -754,7 +741,8 @@ async def callback_handler(client, callback_query):
             await message.edit_text(
                 HELP_TEXT,
                 reply_markup=keyboard,
-                disable_web_page_preview=True
+                disable_web_page_preview=True,
+                parse_mode=ParseMode.MARKDOWN
             )
         
         elif data == "about":
@@ -767,7 +755,8 @@ async def callback_handler(client, callback_query):
             await message.edit_text(
                 ABOUT_TEXT,
                 reply_markup=keyboard,
-                disable_web_page_preview=True
+                disable_web_page_preview=True,
+                parse_mode=ParseMode.MARKDOWN
             )
         
         elif data == "settings":
@@ -982,6 +971,16 @@ async def download_youtube(client, progress_msg, url, download_type="video"):
         
         logging.error(f"YouTube Download Error: {error_msg}")
         return None
+
+async def get_user_info(user_id):
+    """
+    Placeholder function to get user information
+    
+    :param user_id: Telegram user ID
+    :return: Tuple of (status, storage, features)
+    """
+    # Default values if no specific user info is available
+    return "Free User", "0 MB / 2 GB", "Basic Features"
 
 async def broadcast_handler(client, message: Message):
     """

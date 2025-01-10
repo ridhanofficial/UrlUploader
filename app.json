@@ -1,0 +1,46 @@
+{
+    "name": "URL Uploader Bot",
+    "description": "Telegram bot to upload files from direct links to Telegram",
+    "keywords": [
+        "telegram",
+        "url",
+        "uploader",
+        "bot"
+    ],
+    "repository": "https://github.com/YourUsername/URLUploader",
+    "website": "https://github.com/YourUsername/URLUploader",
+    "success_url": "https://t.me/YourBotUsername",
+    "env": {
+        "BOT_TOKEN": {
+            "description": "Your bot token from @BotFather",
+            "required": true
+        },
+        "API_ID": {
+            "description": "Your API_ID from my.telegram.org",
+            "required": true
+        },
+        "API_HASH": {
+            "description": "Your API_HASH from my.telegram.org",
+            "required": true
+        },
+        "OWNER_ID": {
+            "description": "Your Telegram User ID (owner)",
+            "required": true
+        },
+        "AUTH_USERS": {
+            "description": "List of Auth User IDs separated by space",
+            "required": false
+        }
+    },
+    "buildpacks": [
+        {
+            "url": "heroku/python"
+        }
+    ],
+    "formation": {
+        "worker": {
+            "quantity": 1,
+            "size": "eco"
+        }
+    }
+}

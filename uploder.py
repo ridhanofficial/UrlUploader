@@ -909,7 +909,7 @@ async def about_command(client, message: Message):
 @bot.on_callback_query()
 async def callback_handler(client, callback_query):
     """
-    Handle all inline button callbacks
+    Handle all inline button callbacks with comprehensive error management
     
     :param client: Pyrogram client
     :param callback_query: Incoming callback query
@@ -918,145 +918,177 @@ async def callback_handler(client, callback_query):
         # Log the callback data for debugging
         logging.info(f"Received callback data: {callback_query.data}")
         
+        # Ensure callback query is valid
+        if not callback_query or not callback_query.data:
+            logging.warning("Invalid or empty callback query")
+            return
+        
         data = callback_query.data
         message = callback_query.message
+        
+        # Validate message
+        if not message:
+            logging.warning("No message associated with callback")
+            await callback_query.answer("Invalid callback", show_alert=True)
+            return
+        
         chat_id = message.chat.id
+        user_id = callback_query.from_user.id
         
         # Always answer the callback query to prevent hanging
-        await callback_query.answer(
-            "Processing your request...",
-            show_alert=False
-        )
-        
-        # Comprehensive callback handling
-        if data == "start":
-            # Start menu
-            status, storage, features = await get_user_info(callback_query.from_user.id)
-            
-            keyboard = InlineKeyboardMarkup([
-                [
-                    InlineKeyboardButton("⚙️ Settings", callback_data="settings"),
-                    InlineKeyboardButton("❓ Help", callback_data="help")
-                ],
-                [
-                    InlineKeyboardButton("🤖 About", callback_data="about")
-                ],
-                [
-                    InlineKeyboardButton("💫 Support", url="https://t.me/your_support_group"),
-                    InlineKeyboardButton("🤝 Join Channel", url="https://t.me/your_channel")
-                ],
-                [
-                    InlineKeyboardButton("❌ Close", callback_data="close")
-                ]
-            ])
-            
-            await message.edit_text(
-                START_TEXT.format(
-                    first_name=callback_query.from_user.first_name,
-                    status=status,
-                    storage=storage,
-                    features=features
-                ),
-                reply_markup=keyboard,
-                disable_web_page_preview=True
-            )
-        
-        elif data == "help":
-            keyboard = InlineKeyboardMarkup([
-                [
-                    InlineKeyboardButton("🏠 Back to Start", callback_data="start")
-                ]
-            ])
-            
-            await message.edit_text(
-                HELP_TEXT,
-                reply_markup=keyboard,
-                disable_web_page_preview=True,
-                parse_mode=ParseMode.MARKDOWN
-            )
-        
-        elif data == "about":
-            keyboard = InlineKeyboardMarkup([
-                [
-                    InlineKeyboardButton("🏠 Back to Start", callback_data="start")
-                ]
-            ])
-            
-            await message.edit_text(
-                ABOUT_TEXT,
-                reply_markup=keyboard,
-                disable_web_page_preview=True,
-                parse_mode=ParseMode.MARKDOWN
-            )
-        
-        elif data == "settings":
-            keyboard = InlineKeyboardMarkup([
-                [
-                    InlineKeyboardButton("🏠 Back to Start", callback_data="start")
-                ]
-            ])
-            
-            await message.edit_text(
-                "**⚙️ Settings**\n\nNo settings configured yet.",
-                reply_markup=keyboard
-            )
-        
-        elif data == "close":
-            # Delete the message when close button is pressed
-            try:
-                await message.delete()
-            except Exception as e:
-                logging.error(f"Error deleting message: {str(e)}")
-                await callback_query.answer("Could not close the message.", show_alert=True)
-        
-        # Handling download and rename buttons
-        elif data.startswith("default|"):
-            file_id = data.split("|")[1]
-            url = pending_downloads.get(file_id)
-            
-            if not url:
-                await callback_query.answer("❌ Link expired. Please send the URL again.", show_alert=True)
-                return
-            
-            # Delete the selection message
-            try:
-                await message.delete()
-            except Exception as delete_error:
-                logging.warning(f"Could not delete selection message: {delete_error}")
-            
-            # Perform quick download
-            await handle_download_or_upload(client, message, url)
-        
-        elif data.startswith("rename|"):
-            file_id = data.split("|")[1]
-            url = pending_downloads.get(file_id)
-            
-            if not url:
-                await callback_query.answer("❌ Link expired. Please send the URL again.", show_alert=True)
-                return
-            
-            # Prompt for new filename
-            await message.edit_text(
-                "✏️ **Send me the new file name**\n\n"
-                "• Send name without extension\n"
-                "• Or /cancel to abort"
-            )
-            pending_renames[chat_id] = {"url": url, "type": "direct"}
-        
-        elif data.startswith("cancel"):
-            # Cancel download or rename
-            await message.edit_text("❌ **Process Cancelled**")
-        
-        else:
-            # Unknown callback data
-            await callback_query.answer("❌ Invalid button.", show_alert=True)
-    
-    except Exception as e:
-        logging.error(f"Callback Handler Error: {str(e)}")
         try:
-            await message.edit_text(f"❌ An error occurred: {str(e)}")
+            await callback_query.answer(
+                "Processing your request...",
+                show_alert=False
+            )
+        except Exception as answer_error:
+            logging.error(f"Callback answer error: {answer_error}")
+        
+        # Comprehensive callback handling with extensive error protection
+        try:
+            if data == "start":
+                # Start menu
+                status, storage, features = await get_user_info(user_id)
+                
+                keyboard = InlineKeyboardMarkup([
+                    [
+                        InlineKeyboardButton("⚙️ Settings", callback_data="settings"),
+                        InlineKeyboardButton("❓ Help", callback_data="help")
+                    ],
+                    [
+                        InlineKeyboardButton("🤖 About", callback_data="about")
+                    ],
+                    [
+                        InlineKeyboardButton("💫 Support", url="https://t.me/your_support_group"),
+                        InlineKeyboardButton("🤝 Join Channel", url="https://t.me/your_channel")
+                    ],
+                    [
+                        InlineKeyboardButton("❌ Close", callback_data="close")
+                    ]
+                ])
+                
+                await message.edit_text(
+                    START_TEXT.format(
+                        first_name=callback_query.from_user.first_name,
+                        status=status,
+                        storage=storage,
+                        features=features
+                    ),
+                    reply_markup=keyboard,
+                    disable_web_page_preview=True
+                )
+            
+            elif data == "help":
+                keyboard = InlineKeyboardMarkup([
+                    [
+                        InlineKeyboardButton("🏠 Back to Start", callback_data="start")
+                    ]
+                ])
+                
+                await message.edit_text(
+                    HELP_TEXT,
+                    reply_markup=keyboard,
+                    disable_web_page_preview=True,
+                    parse_mode=ParseMode.MARKDOWN
+                )
+            
+            elif data == "about":
+                keyboard = InlineKeyboardMarkup([
+                    [
+                        InlineKeyboardButton("🏠 Back to Start", callback_data="start")
+                    ]
+                ])
+                
+                await message.edit_text(
+                    ABOUT_TEXT,
+                    reply_markup=keyboard,
+                    disable_web_page_preview=True,
+                    parse_mode=ParseMode.MARKDOWN
+                )
+            
+            elif data == "settings":
+                keyboard = InlineKeyboardMarkup([
+                    [
+                        InlineKeyboardButton("🏠 Back to Start", callback_data="start")
+                    ]
+                ])
+                
+                await message.edit_text(
+                    "**⚙️ Settings**\n\nNo settings configured yet.",
+                    reply_markup=keyboard
+                )
+            
+            elif data == "close":
+                # Delete the message when close button is pressed
+                try:
+                    await message.delete()
+                except Exception as e:
+                    logging.error(f"Error deleting message: {str(e)}")
+                    await callback_query.answer("Could not close the message.", show_alert=True)
+            
+            # Handling download and rename buttons
+            elif data.startswith("default|"):
+                file_id = data.split("|")[1]
+                url = pending_downloads.get(file_id)
+                
+                if not url:
+                    await callback_query.answer("❌ Link expired. Please send the URL again.", show_alert=True)
+                    return
+                
+                # Delete the selection message
+                try:
+                    await message.delete()
+                except Exception as delete_error:
+                    logging.warning(f"Could not delete selection message: {delete_error}")
+                
+                # Perform quick download
+                await handle_download_or_upload(client, message, url)
+            
+            elif data.startswith("rename|"):
+                file_id = data.split("|")[1]
+                url = pending_downloads.get(file_id)
+                
+                if not url:
+                    await callback_query.answer("❌ Link expired. Please send the URL again.", show_alert=True)
+                    return
+                
+                # Prompt for new filename
+                await message.edit_text(
+                    "✏️ **Send me the new file name**\n\n"
+                    "• Send name without extension\n"
+                    "• Or /cancel to abort"
+                )
+                pending_renames[chat_id] = {"url": url, "type": "direct"}
+            
+            elif data.startswith("cancel|"):
+                file_id = data.split("|")[1]
+                
+                # Remove from pending downloads
+                pending_downloads.pop(file_id, None)
+                
+                # Delete the selection message
+                try:
+                    await message.delete()
+                except Exception as delete_error:
+                    logging.warning(f"Could not delete selection message: {delete_error}")
+            
+            else:
+                # Unknown callback data
+                await callback_query.answer("❌ Invalid button.", show_alert=True)
+        
+        except Exception as callback_error:
+            logging.error(f"Callback Handler Error: {callback_error}")
+            try:
+                await message.edit_text(f"❌ An unexpected error occurred: {str(callback_error)}")
+            except:
+                await callback_query.answer(f"❌ An unexpected error occurred", show_alert=True)
+    
+    except Exception as global_error:
+        logging.critical(f"Global Callback Handler Error: {global_error}")
+        try:
+            await callback_query.answer("❌ A critical error occurred", show_alert=True)
         except:
-            await callback_query.answer(f"❌ An error occurred: {str(e)}", show_alert=True)
+            pass
 
 @bot.on_message(filters.private & filters.text)
 async def handle_message(client, message):
@@ -1183,85 +1215,6 @@ async def handle_message(client, message):
             await message.reply_text(f"❌ An error occurred: {str(e)}")
         except:
             pass
-
-@bot.on_callback_query()
-async def callback_handler(client, callback_query):
-    """
-    Handle callback queries for download options
-    """
-    try:
-        # Log the callback data for debugging
-        logging.info(f"Received callback data: {callback_query.data}")
-        
-        data = callback_query.data
-        message = callback_query.message
-        chat_id = message.chat.id
-        
-        # Always answer the callback query to prevent hanging
-        await callback_query.answer(
-            "Processing your request...",
-            show_alert=False
-        )
-        
-        # Parse callback data
-        if data.startswith("default|"):
-            # Quick download
-            file_id = data.split("|")[1]
-            url = pending_downloads.get(file_id)
-            
-            if not url:
-                await callback_query.answer("❌ Link expired. Please send the URL again.", show_alert=True)
-                return
-            
-            # Delete the selection message
-            try:
-                await message.delete()
-            except Exception as delete_error:
-                logging.warning(f"Could not delete selection message: {delete_error}")
-            
-            # Perform quick download
-            await handle_download_or_upload(client, message, url)
-        
-        elif data.startswith("rename|"):
-            # Custom name option
-            file_id = data.split("|")[1]
-            url = pending_downloads.get(file_id)
-            
-            if not url:
-                await callback_query.answer("❌ Link expired. Please send the URL again.", show_alert=True)
-                return
-            
-            # Prompt for new filename
-            await message.edit_text(
-                "✏️ **Send me the new file name**\n\n"
-                "• Send name without extension\n"
-                "• Or /cancel to abort"
-            )
-            pending_renames[chat_id] = {"url": url, "type": "direct"}
-        
-        elif data.startswith("cancel|"):
-            # Cancel download
-            file_id = data.split("|")[1]
-            
-            # Remove from pending downloads
-            pending_downloads.pop(file_id, None)
-            
-            # Delete the selection message
-            try:
-                await message.delete()
-            except Exception as delete_error:
-                logging.warning(f"Could not delete selection message: {delete_error}")
-        
-        else:
-            # Unknown callback data
-            await callback_query.answer("❌ Invalid button.", show_alert=True)
-    
-    except Exception as e:
-        logging.error(f"Callback Handler Error: {str(e)}")
-        try:
-            await message.edit_text(f"❌ An error occurred: {str(e)}")
-        except:
-            await callback_query.answer(f"❌ An error occurred: {str(e)}", show_alert=True)
 
 async def download_youtube(client, message, url, download_type="video"):
     """

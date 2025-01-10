@@ -26,9 +26,14 @@ from config import (
     SESSION_STRING,
     MAX_FILE_SIZE,
     DOWNLOAD_LOCATION,
-    OWNER_ID,
-    FORCE_SUB_CHANNEL
+    OWNER_ID
 )
+
+# Define FORCE_SUB_CHANNEL if not present in config
+try:
+    from config import FORCE_SUB_CHANNEL
+except ImportError:
+    FORCE_SUB_CHANNEL = "@RSforeverBots"  # Default channel
 
 # Fallback for THUMB_LOCATION if not imported
 THUMB_LOCATION = os.path.join(os.path.dirname(os.path.abspath(__file__)), "thumb")
@@ -355,6 +360,27 @@ async def get_user_info(user_id: int):
 • Basic thumbnails
 • Standard support"""
 
+# Bot about text
+ABOUT_TEXT = """
+🤖 **URL Uploader Bot**
+
+**Version:** 2.0 Free Edition
+**Developer:** Your Name
+
+**Features:**
+• Upload files up to 2GB
+• Direct URL downloads
+• YouTube link support
+• Custom thumbnails
+• File renaming
+
+**Support:**
+• Telegram: @your_support_username
+• GitHub: [Your GitHub Repo]
+
+Thank you for using our bot! 
+"""
+
 START_TEXT = """
 👋 **Welcome to URL Uploader Bot!**
 
@@ -381,10 +407,10 @@ async def start_command(client, message: Message):
     
     keyboard = InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("⚙️ Settings", callback_data="settings")
+            InlineKeyboardButton("⚙️ Settings", callback_data="settings"),
+            InlineKeyboardButton("❓ Help", callback_data="help")
         ],
         [
-            InlineKeyboardButton("❓ Help", callback_data="help"),
             InlineKeyboardButton("🤖 About", callback_data="about")
         ],
         [
@@ -392,6 +418,15 @@ async def start_command(client, message: Message):
             InlineKeyboardButton("💫 Support", url="https://t.me/your_support")
         ]
     ])
+    
+    # Delete previous messages from the user
+    try:
+        await client.delete_messages(
+            chat_id=message.chat.id, 
+            message_ids=[message.id]
+        )
+    except Exception:
+        pass
     
     await message.reply_text(
         START_TEXT.format(
@@ -405,84 +440,102 @@ async def start_command(client, message: Message):
 
 @bot.on_callback_query()
 async def callback_handler(client, callback_query):
-    data = callback_query.data
-    
-    if data == "start":
-        keyboard = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("⚙️ Settings", callback_data="settings")
-            ],
-            [
-                InlineKeyboardButton("❓ Help", callback_data="help"),
-                InlineKeyboardButton("🤖 About", callback_data="about")
-            ],
-            [
-                InlineKeyboardButton("🌟 Channel", url=f"https://t.me/{FORCE_SUB_CHANNEL.replace('@', '')}"),
-                InlineKeyboardButton("💫 Support", url="https://t.me/your_support")
-            ]
-        ])
+    """Handle all inline button callbacks"""
+    try:
+        data = callback_query.data
         
-        await callback_query.message.edit_text(
-            START_TEXT.format(
-                status="⭐ Free User",
-                storage="Up to 2GB per file",
-                features="""
-• Upload files up to 2GB
-• Basic thumbnails
-• Standard support"""
-            ),
-            reply_markup=keyboard,
-            disable_web_page_preview=True
-        )
-    
-    elif data == "settings":
-        keyboard = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("🖼️ Thumbnail", callback_data="thumbnail_settings"),
-                InlineKeyboardButton("🔔 Notifications", callback_data="notification_settings")
-            ],
-            [
-                InlineKeyboardButton("🏠 Back to Start", callback_data="start")
-            ]
-        ])
+        # Always answer the callback query to remove loading state
+        await callback_query.answer()
         
-        await callback_query.message.edit_text(
-            "**⚙️ Bot Settings**\n\n"
-            "Customize your bot experience:\n"
-            "• Manage thumbnails\n"
-            "• Configure notifications\n"
-            "• Personalize your uploads",
-            reply_markup=keyboard
-        )
-    
-    elif data == "help":
-        keyboard = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("🏠 Back to Start", callback_data="start")
-            ]
-        ])
+        if data == "start":
+            keyboard = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("⚙️ Settings", callback_data="settings"),
+                    InlineKeyboardButton("❓ Help", callback_data="help")
+                ],
+                [
+                    InlineKeyboardButton("🤖 About", callback_data="about")
+                ],
+                [
+                    InlineKeyboardButton("🌟 Channel", url=f"https://t.me/{FORCE_SUB_CHANNEL.replace('@', '')}"),
+                    InlineKeyboardButton("💫 Support", url="https://t.me/your_support")
+                ]
+            ])
+            
+            await callback_query.message.edit_text(
+                START_TEXT.format(
+                    status="⭐ Free User",
+                    storage="Up to 2GB per file",
+                    features="• Upload files up to 2GB\n• Basic thumbnails\n• Standard support"
+                ),
+                reply_markup=keyboard,
+                disable_web_page_preview=True
+            )
         
-        await callback_query.message.edit_text(
-            HELP_TEXT,
-            reply_markup=keyboard,
-            disable_web_page_preview=True
-        )
-    
-    elif data == "about":
-        keyboard = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("🏠 Back to Start", callback_data="start")
-            ]
-        ])
+        elif data == "settings":
+            keyboard = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("🖼️ Thumbnail", callback_data="thumbnail_settings"),
+                    InlineKeyboardButton("🔔 Notifications", callback_data="notification_settings")
+                ],
+                [
+                    InlineKeyboardButton("🏠 Back to Start", callback_data="start")
+                ]
+            ])
+            
+            await callback_query.message.edit_text(
+                "**⚙️ Bot Settings**\n\n"
+                "Customize your bot experience:\n"
+                "• Manage thumbnails\n"
+                "• Configure notifications\n"
+                "• Personalize your uploads",
+                reply_markup=keyboard
+            )
         
-        await callback_query.message.edit_text(
-            ABOUT_TEXT,
-            reply_markup=keyboard,
-            disable_web_page_preview=True
-        )
+        elif data == "help":
+            keyboard = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("🏠 Back to Start", callback_data="start")
+                ]
+            ])
+            
+            await callback_query.message.edit_text(
+                HELP_TEXT,
+                reply_markup=keyboard,
+                disable_web_page_preview=True
+            )
+        
+        elif data == "about":
+            keyboard = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("🏠 Back to Start", callback_data="start")
+                ]
+            ])
+            
+            await callback_query.message.edit_text(
+                ABOUT_TEXT,
+                reply_markup=keyboard,
+                disable_web_page_preview=True
+            )
+        
+        # Delete previous message after processing callback
+        try:
+            await client.delete_messages(
+                chat_id=callback_query.message.chat.id, 
+                message_ids=[callback_query.message.id]
+            )
+        except Exception:
+            pass
     
-    # Answer the callback query
-    await callback_query.answer()
+    except Exception as e:
+        # Log any unexpected errors
+        logging.error(f"Callback handler error: {str(e)}")
+        try:
+            await callback_query.message.reply_text(
+                "❌ An error occurred. Please try again."
+            )
+        except Exception:
+            pass
 
 async def save_photo(client, message):
     """Save photo as thumbnail"""

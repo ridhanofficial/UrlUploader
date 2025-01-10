@@ -1,8 +1,17 @@
+import logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(),  # Outputs to console
+        logging.FileHandler('bot.log')  # Outputs to a log file
+    ]
+)
+
 import os
 import re
 import uuid
 import time
-import logging
 import asyncio
 import math
 

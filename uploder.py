@@ -77,7 +77,7 @@ async def extract_youtube_info(url):
             
             # Get best quality that's under size limit
             for f in formats:
-                if f.get('filesize', 0) < 2 * 1024 * 1024 * 1024:
+                if f.get('filesize', 0) < MAX_FILE_SIZE:
                     return {
                         'url': f['url'],
                         'title': info.get('title', 'video'),
@@ -103,10 +103,10 @@ async def process_youtube(client, message, url):
             return
             
         # Check file size
-        if info['filesize'] > 2 * 1024 * 1024 * 1024:
+        if info['filesize'] > MAX_FILE_SIZE:
             await progress_msg.edit_text(
                 f"❌ **Video size ({humanbytes(info['filesize'])}) is too large!**\n\n"
-                f"Maximum allowed size is 2GB ({humanbytes(2 * 1024 * 1024 * 1024)})"
+                f"Maximum allowed size is 2GB ({humanbytes(MAX_FILE_SIZE)})"
             )
             return
             
@@ -134,11 +134,9 @@ async def process_youtube(client, message, url):
         await message.reply_text(f"❌ **Error processing YouTube link:**\n\n`{str(e)}`")
 
 async def get_max_file_size(user_id: int) -> int:
-    """Return max file size limit for all users"""
-    return 2 * 1024 * 1024 * 1024  # 2GB
+    return MAX_FILE_SIZE
 
 async def get_concurrent_downloads(user_id: int) -> int:
-    """Return max concurrent downloads for all users"""
     return 5
 
 async def save_thumb(user_id: int, thumb_path: str):
@@ -189,8 +187,8 @@ async def async_download_file(url, filename, progress=None, progress_args=None):
     try:
         # Check file size before downloading
         file_size = await get_file_size(url)
-        if file_size > 2 * 1024 * 1024 * 1024:
-            raise Exception(f"File size ({humanbytes(file_size)}) is too large. Maximum allowed size is {humanbytes(2 * 1024 * 1024 * 1024)}")
+        if file_size > MAX_FILE_SIZE:
+            raise Exception(f"File size ({humanbytes(file_size)}) is too large. Maximum allowed size is {humanbytes(MAX_FILE_SIZE)}")
         elif file_size == 0:
             # If we couldn't get the file size, we'll try downloading anyway
             logging.warning("Couldn't get file size before download")
@@ -201,8 +199,8 @@ async def async_download_file(url, filename, progress=None, progress_args=None):
                     raise Exception(f"Failed to download: HTTP {response.status}")
                 
                 file_size = int(response.headers.get('content-length', 0))
-                if file_size > 2 * 1024 * 1024 * 1024:
-                    raise Exception(f"File size ({humanbytes(file_size)}) is too large. Maximum allowed size is {humanbytes(2 * 1024 * 1024 * 1024)}")
+                if file_size > MAX_FILE_SIZE:
+                    raise Exception(f"File size ({humanbytes(file_size)}) is too large. Maximum allowed size is {humanbytes(MAX_FILE_SIZE)}")
                 
                 downloaded = 0
                 start_time = time.time()
@@ -252,13 +250,10 @@ async def send_file_with_thumbnail(client, chat_id, document, file_name, caption
         # Send new progress message for upload
         progress_message = await client.send_message(chat_id, "**🔄 Preparing Upload...**")
         
-        # Check file size
-        file_size = os.path.getsize(document)
-        if file_size > 2 * 1024 * 1024 * 1024:  # 2GB limit
-            raise ValueError("File size exceeds 2GB limit")
-        
         try:
             # Use user client for large files
+            file_size = os.path.getsize(document)
+            
             await client.send_document(
                 chat_id=chat_id,
                 document=document,
@@ -276,12 +271,15 @@ async def send_file_with_thumbnail(client, chat_id, document, file_name, caption
             # Delete progress message after upload
             await progress_message.delete()
         except Exception as e:
-            await progress_message.edit(f"**❌ Upload Failed!**\n\n`{str(e)}`")
+            # If sending fails, show error
+            error_msg = str(e)
+            await progress_message.edit(f"**❌ Upload Failed!**\n\n`{error_msg}`")
             raise e
             
     except Exception as e:
         try:
-            await progress_message.edit(f"**❌ Upload Failed!**\n\n`{str(e)}`")
+            error_msg = str(e)
+            await progress_message.edit(f"**❌ Upload Failed!**\n\n`{error_msg}`")
         except Exception:
             pass
         raise e
@@ -347,62 +345,39 @@ def TimeFormatter(milliseconds: int) -> str:
     return tmp[:-2]
 
 async def check_user_premium(user_id: int) -> bool:
-    """Placeholder for premium check - always returns False"""
+    """Always return False for free option only"""
     return False
 
-# Bot start text with dynamic premium info
+async def get_user_info(user_id: int):
+    """Get user's features for free tier"""
+    return "⭐ Free User", "Up to 2GB per file", """
+• Upload files up to 2GB
+• Basic thumbnails
+• Standard support"""
+
 START_TEXT = """
-✨ **Welcome to URL Uploader Bot** ✨
+👋 **Welcome to URL Uploader Bot!**
 
-I can help you download files from direct links and upload them to Telegram.
+Your Status: {status}
+Storage: {storage}
 
-**Features:**
-• 📥 Upload files up to 2GB
-• 🎥 Support for YouTube links
-• ⚡️ Fast downloads
-• 📝 Custom file renaming
-• 📊 Real-time progress tracking
-• 🖼️ Custom thumbnails
+I can help you upload files from various sources:
+• Direct URLs 
+• YouTube links
+• Telegram files
 
-**Commands:**
-• /start - Start the bot
-• /help - Get detailed help
-• /about - About the bot
-• /thumb - Set custom thumbnail
-• /delthumb - Delete thumbnail
+**Features Available:**
+{features}
 
-🔰 Send me any direct download link or YouTube link to get started!
-"""
-
-HELP_TEXT = """
-📚 **URL Uploader Help**
-
-**How to use:**
-1. Send me any direct download link or YouTube link
-2. Choose download options:
-   • ⚡️ Quick Download - Original filename
-   • ✏️ Custom Name - Rename before upload
-   • ❌ Cancel - Cancel the process
-
-**Supported Links:**
-• Direct download URLs (Up to 2GB)
-• YouTube video links
-• Google Drive links (soon)
-
-**Features:**
-• 🚀 Fast processing
-• 📊 Progress updates
-• 🎯 Error reporting
-• 💫 Custom thumbnails
-• 📝 File renaming
-
-Need help? Contact support.
+Use /help to see all available commands.
 """
 
 @bot.on_message(filters.command(["start"]) & filters.private)
 async def start_command(client, message: Message):
     if not await force_sub(client, message):
         return
+    
+    status, storage, features = await get_user_info(message.from_user.id)
     
     keyboard = InlineKeyboardMarkup([
         [
@@ -419,7 +394,11 @@ async def start_command(client, message: Message):
     ])
     
     await message.reply_text(
-        START_TEXT,
+        START_TEXT.format(
+            status=status,
+            storage=storage,
+            features=features
+        ),
         reply_markup=keyboard,
         disable_web_page_preview=True
     )
@@ -444,7 +423,14 @@ async def callback_handler(client, callback_query):
         ])
         
         await callback_query.message.edit_text(
-            START_TEXT,
+            START_TEXT.format(
+                status="⭐ Free User",
+                storage="Up to 2GB per file",
+                features="""
+• Upload files up to 2GB
+• Basic thumbnails
+• Standard support"""
+            ),
             reply_markup=keyboard,
             disable_web_page_preview=True
         )

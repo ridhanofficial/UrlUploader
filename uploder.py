@@ -398,13 +398,91 @@ I can help you upload files from various sources:
 Use /help to see all available commands.
 """
 
-@bot.on_message(filters.command(["start"]) & filters.private)
-async def start_command(client, message: Message):
+HELP_TEXT = """
+**Available Commands:**
+
+• `/start` - Start the bot
+• `/help` - Show this help message
+• `/about` - About the bot
+• `/thumb` - Set a custom thumbnail
+• `/delthumb` - Delete custom thumbnail
+• `/broadcast` - Broadcast a message (Owner only)
+
+**Usage:**
+
+• Send a direct download link or YouTube URL to upload a file
+• Use `/thumb` to set a custom thumbnail
+• Use `/delthumb` to delete the custom thumbnail
+"""
+
+@bot.on_message(filters.command(["help"]) & filters.private)
+async def help_command(client, message: Message):
+    # Store the original message ID
+    original_message_id = message.id
+
     # Delete only the user's command message
     try:
         await client.delete_messages(
             chat_id=message.chat.id, 
-            message_ids=[message.id]
+            message_ids=[original_message_id]
+        )
+    except Exception:
+        pass
+
+    # Create keyboard for help
+    keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🏠 Back to Start", callback_data="start")
+        ]
+    ])
+    
+    # Send help message
+    await client.send_message(
+        chat_id=message.chat.id,
+        text=HELP_TEXT,
+        reply_markup=keyboard,
+        disable_web_page_preview=True
+    )
+
+@bot.on_message(filters.command(["about"]) & filters.private)
+async def about_command(client, message: Message):
+    # Store the original message ID
+    original_message_id = message.id
+
+    # Delete only the user's command message
+    try:
+        await client.delete_messages(
+            chat_id=message.chat.id, 
+            message_ids=[original_message_id]
+        )
+    except Exception:
+        pass
+
+    # Create keyboard for about
+    keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🏠 Back to Start", callback_data="start")
+        ]
+    ])
+    
+    # Send about message
+    await client.send_message(
+        chat_id=message.chat.id,
+        text=ABOUT_TEXT,
+        reply_markup=keyboard,
+        disable_web_page_preview=True
+    )
+
+@bot.on_message(filters.command(["start"]) & filters.private)
+async def start_command(client, message: Message):
+    # Store the original message ID
+    original_message_id = message.id
+
+    # Delete only the user's command message
+    try:
+        await client.delete_messages(
+            chat_id=message.chat.id, 
+            message_ids=[original_message_id]
         )
     except Exception:
         pass
@@ -428,8 +506,10 @@ async def start_command(client, message: Message):
         ]
     ])
     
-    await message.reply_text(
-        START_TEXT.format(
+    # Send the response and store the bot's message
+    await client.send_message(
+        chat_id=message.chat.id,
+        text=START_TEXT.format(
             status=status,
             storage=storage,
             features=features

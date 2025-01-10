@@ -400,6 +400,15 @@ Use /help to see all available commands.
 
 @bot.on_message(filters.command(["start"]) & filters.private)
 async def start_command(client, message: Message):
+    # Delete only the user's command message
+    try:
+        await client.delete_messages(
+            chat_id=message.chat.id, 
+            message_ids=[message.id]
+        )
+    except Exception:
+        pass
+
     if not await force_sub(client, message):
         return
     
@@ -418,15 +427,6 @@ async def start_command(client, message: Message):
             InlineKeyboardButton("💫 Support", url="https://t.me/your_support")
         ]
     ])
-    
-    # Delete previous messages from the user
-    try:
-        await client.delete_messages(
-            chat_id=message.chat.id, 
-            message_ids=[message.id]
-        )
-    except Exception:
-        pass
     
     await message.reply_text(
         START_TEXT.format(
@@ -517,15 +517,6 @@ async def callback_handler(client, callback_query):
                 reply_markup=keyboard,
                 disable_web_page_preview=True
             )
-        
-        # Delete previous message after processing callback
-        try:
-            await client.delete_messages(
-                chat_id=callback_query.message.chat.id, 
-                message_ids=[callback_query.message.id]
-            )
-        except Exception:
-            pass
     
     except Exception as e:
         # Log any unexpected errors

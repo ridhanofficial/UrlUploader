@@ -321,33 +321,28 @@ async def progress_for_pyrogram(current, total, ud_type, message, start):
     now = time.time()
     diff = now - start
     
-    if round(diff % 10.00) == 0 or current == total:
-        percentage = current * 100 / total
-        speed = current / diff
-        elapsed_time = round(diff) * 1000
-        time_to_completion = round((total - current) / speed) * 1000
-        estimated_total_time = elapsed_time + time_to_completion
-
-        elapsed_time = TimeFormatter(milliseconds=elapsed_time)
-        estimated_total_time = TimeFormatter(milliseconds=estimated_total_time)
-
-        progress = "[{0}{1}] \nP: {2}%\n".format(
-            ''.join(["█" for _ in range(math.floor(percentage / 5))]),
-            ''.join(["░" for _ in range(20 - math.floor(percentage / 5))]),
-            round(percentage, 2))
-
-        tmp = progress + "{0} of {1}\nSpeed: {2}/s\nETA: {3}\n".format(
-            humanbytes(current),
-            humanbytes(total),
-            humanbytes(speed),
-            estimated_total_time if estimated_total_time != '' else "0 s"
+    if round(diff % 3.0) == 0 or current == total:
+        # Calculate speed and progress
+        speed = current / diff if diff > 0 else 0
+        percentage = (current * 100) / total if total > 0 else 0
+        
+        # Format progress bar
+        progress_size = 20
+        filled = int(percentage / (100/progress_size))
+        bar = "█" * filled + "░" * (progress_size - filled)
+        
+        # Format text
+        text = (
+            f"{ud_type}\n\n"
+            f"**Progress:** {bar}\n"
+            f"**Completed:** {humanbytes(current)} of {humanbytes(total)}\n"
+            f"**Speed:** {humanbytes(speed)}/s\n"
+            f"**ETA:** {TimeFormatter((total-current)/speed if speed > 0 else 0)}\n"
         )
+        
         try:
-            await message.edit(
-                text=f"{ud_type}\n {tmp}",
-                parse_mode=ParseMode.MARKDOWN
-            )
-        except Exception:
+            await message.edit_text(text)
+        except:
             pass
 
 def humanbytes(size):
@@ -505,204 +500,102 @@ async def start_command(client, message: Message):
 
 @bot.on_callback_query()
 async def callback_handler(client, callback_query):
-    """Handle all inline button callbacks"""
     try:
         data = callback_query.data
         message = callback_query.message
         
-        # Always answer the callback query to remove loading state
-        await callback_query.answer()
+        # Always answer callback query first
+        await callback_query.answer("Processing...")
         
-        # Direct link download handler
-        if data.startswith("default|") or data.startswith("rename|"):
-            file_id = data.split("|")[1]
+        if data == "cancel":
+            await message.edit_text("❌ **Process Cancelled**")
+            return
             
-            if data.startswith("default|"):
-                # Quick download
-                url = pending_downloads.get(file_id)
-                if not url:
-                    await message.edit_text("❌ Download link expired. Please try again.")
-                    return
+        if data.startswith(("default|", "rename|")):
+            file_id = data.split("|")[1]
+            url = pending_downloads.get(file_id)
+            
+            if not url:
+                await message.edit_text("❌ Link expired. Please send the URL again.")
+                return
                 
-                # Create a new progress message
-                progress_msg = await message.reply_text("📥 **Downloading file...**")
+            if data.startswith("default|"):
+                await message.edit_text("🔄 **Starting Download...**")
                 
                 try:
-                    # Get filename from URL
-                    filename = await get_filename(url) or "downloaded_file"
+                    # Get file info
+                    filename = await get_filename(url)
+                    file_size = await get_file_size(url)
                     
-                    # Download file
-                    file_path = await async_download_file(
-                        url, 
-                        filename, 
-                        progress=progress_for_pyrogram, 
-                        progress_args=(progress_msg, "Downloading", time.time())
+                    # Show download status
+                    status_msg = await message.reply_text(
+                        f"📥 **Downloading File**\n\n"
+                        f"**File:** `{filename}`\n"
+                        f"**Size:** {humanbytes(file_size)}\n\n"
+                        "**Status:** Starting download..."
                     )
                     
-                    # Send file with thumbnail
+                    # Download file with progress
+                    downloaded_file = await async_download_file(
+                        url=url,
+                        filename=filename,
+                        progress=progress_for_pyrogram,
+                        progress_args=(status_msg, time.time())
+                    )
+                    
+                    # Upload file
                     await send_file_with_thumbnail(
-                        client, 
-                        message.chat.id, 
-                        file_path, 
-                        filename, 
-                        caption="📥 File Downloaded", 
-                        progress=progress_for_pyrogram, 
-                        progress_args=(progress_msg, "Uploading", time.time())
+                        client,
+                        message.chat.id,
+                        downloaded_file,
+                        filename,
+                        f"📤 **Upload Complete!**\n\n**Filename:** `{filename}`",
+                        progress_for_pyrogram,
+                        (status_msg, time.time())
                     )
                     
-                    # Clean up
-                    os.remove(file_path)
-                    del pending_downloads[file_id]
-                    await progress_msg.delete()
-                
+                    # Cleanup
+                    try:
+                        os.remove(downloaded_file)
+                        await message.delete()
+                    except:
+                        pass
+                        
                 except Exception as e:
-                    await progress_msg.edit_text(f"❌ **Download failed:** {str(e)}")
-                    logging.error(f"Direct download error: {str(e)}")
-            
+                    await status_msg.edit_text(f"❌ **Download Failed!**\n\n`{str(e)}`")
+                    
+                finally:
+                    if file_id in pending_downloads:
+                        del pending_downloads[file_id]
+                        
             elif data.startswith("rename|"):
-                # Custom name
-                url = pending_downloads.get(file_id)
-                if not url:
-                    await message.edit_text("❌ Download link expired. Please try again.")
-                    return
-                
                 pending_renames[message.chat.id] = {
-                    "type": "direct",
-                    "url": url
+                    "url": url,
+                    "type": "direct"
                 }
                 await message.edit_text(
-                    "📝 **Send me a custom file name**\n\n"
-                    "• Send the name you want (without extension)\n"
-                    "• Or send /cancel to abort"
+                    "✏️ **Send me the new file name**\n\n"
+                    "• Without extension\n"
+                    "• Send /cancel to cancel"
                 )
-            
-            return
-        
-        # YouTube download handler
-        if data.startswith("ytdl|"):
-            parts = data.split("|")
-            if len(parts) == 3:
-                url = parts[1]
-                download_type = parts[2]
                 
-                if download_type == "rename":
-                    # Custom name for YouTube download
-                    pending_renames[callback_query.from_user.id] = {
-                        "type": "youtube",
-                        "url": url
-                    }
-                    await message.edit_text(
-                        "📝 **Send me a custom file name**\n\n"
-                        "• Send the name you want (without extension)\n"
-                        "• Or send /cancel to abort"
-                    )
-            return
-        
-        # YouTube video download with quality selection
-        if data.startswith("ytdl_video_quality|"):
-            url, format_id = data.split("|")[1:]
-            
-            # Delete previous messages to clean up
-            try:
-                await message.reply_to_message.delete()
-            except:
-                pass
-            
-            try:
-                await message.delete()
-            except:
-                pass
-            
-            # Trigger video download
-            ydl_opts = {
-                "format": format_id,
-                "outtmpl": "%(title)s - %(extractor)s-%(id)s.%(ext)s",
-                "writethumbnail": True,
-            }
-            
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info_dict = ydl.extract_info(url, download=False)
+        elif data.startswith("ytdl_"):
+            # Handle YouTube download options
+            if data.startswith("ytdl_video_quality|"):
+                url, quality = data.split("|")[1:]
+                await download_youtube(client, message, url, "video", quality)
                 
-                # Create a new progress message
-                progress_msg = await callback_query.message.reply_text("🎥 **Downloading Video...**")
+            elif data.startswith("ytdl_audio|"):
+                url = data.split("|")[1]
+                await download_youtube(client, message, url, "audio")
                 
-                try:
-                    await download_youtube(client, progress_msg, url, "video")
-                except Exception as e:
-                    await progress_msg.edit_text(f"❌ **Download failed:** {str(e)}")
-            
-            return
-        
-        # YouTube audio download
-        if data.startswith("ytdl_audio|"):
-            url = data.split("|")[1]
-            
-            # Delete previous messages to clean up
-            try:
-                await message.reply_to_message.delete()
-            except:
-                pass
-            
-            try:
-                await message.delete()
-            except:
-                pass
-            
-            # Trigger audio download
-            ydl_opts = {
-                "format": "bestaudio",
-                "postprocessors": [{
-                    "key": "FFmpegExtractAudio",
-                    "preferredcodec": "mp3",
-                    "preferredquality": "192",
-                }],
-                "outtmpl": "%(title)s - %(extractor)s-%(id)s.%(ext)s",
-                "writethumbnail": True,
-            }
-            
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info_dict = ydl.extract_info(url, download=False)
-                
-                # Create a new progress message
-                progress_msg = await callback_query.message.reply_text("🎵 **Downloading Audio...**")
-                
-                try:
-                    await download_youtube(client, progress_msg, url, "audio")
-                except Exception as e:
-                    await progress_msg.edit_text(f"❌ **Download failed:** {str(e)}")
-            
-            return
-        
-        # Cancel button handler
-        if data == "cancel":
-            await message.edit_text("❌ **Download cancelled**")
-            return
-        
-        # Existing callback handlers
-        if data == "start":
-            keyboard = InlineKeyboardMarkup([
-                [
-                    InlineKeyboardButton("⚙️ Settings", callback_data="settings"),
-                    InlineKeyboardButton("❓ Help", callback_data="help")
-                ],
-                [
-                    InlineKeyboardButton("🤖 About", callback_data="about")
-                ],
-                [
-                    InlineKeyboardButton("💫 Support", url="https://t.me/your_support")
-                ]
-            ])
-            
-            await message.edit_text(
-                START_TEXT.format(callback_query.from_user.first_name),
-                reply_markup=keyboard
-            )
-        
     except Exception as e:
-        logging.error(f"Callback handler error: {str(e)}")
-        await message.reply_text("❌ An error occurred. Please try again.")
+        try:
+            await message.edit_text(f"❌ **Error:** `{str(e)}`")
+        except:
+            pass
 
-async def download_youtube(client, progress_msg, url, download_type="video"):
+async def download_youtube(client, progress_msg, url, download_type="video", quality=None):
     """
     Download YouTube video or audio using yt-dlp
     
@@ -710,12 +603,13 @@ async def download_youtube(client, progress_msg, url, download_type="video"):
     :param progress_msg: Progress message to update
     :param url: YouTube URL
     :param download_type: 'video' or 'audio'
+    :param quality: Specific quality format ID for video
     """
     try:
         # Prepare download options based on type
         if download_type == "video":
             ydl_opts = {
-                "format": "best[ext=mp4]",
+                "format": quality or "best[ext=mp4]",
                 "outtmpl": "%(title)s - %(extractor)s-%(id)s.%(ext)s",
                 "writethumbnail": True,
             }
@@ -830,6 +724,39 @@ async def download_youtube(client, progress_msg, url, download_type="video"):
         logging.error(f"YouTube download error: {str(e)}")
         await progress_msg.edit_text(f"❌ **Download failed:** {str(e)}")
         raise
+
+async def async_download_file(url, filename, progress=None, progress_args=None):
+    """Download file with better progress updates"""
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as response:
+                if response.status != 200:
+                    raise Exception(f"Failed to download: HTTP {response.status}")
+                
+                # Get file size
+                file_size = int(response.headers.get('content-length', 0))
+                downloaded = 0
+                start_time = time.time()
+                
+                with open(filename, 'wb') as f:
+                    async for chunk in response.content.iter_chunked(1024*8):
+                        if chunk:
+                            f.write(chunk)
+                            downloaded += len(chunk)
+                            if progress and progress_args:
+                                await progress(
+                                    downloaded,
+                                    file_size,
+                                    "📥 Downloading",
+                                    progress_args[0],
+                                    start_time
+                                )
+                return filename
+                
+    except Exception as e:
+        if os.path.exists(filename):
+            os.remove(filename)
+        raise Exception(f"Download failed: {str(e)}")
 
 async def broadcast_handler(client, message: Message):
     """

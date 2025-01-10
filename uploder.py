@@ -116,10 +116,11 @@ async def process_youtube(client, message, url):
         # Show download options
         keyboard = InlineKeyboardMarkup([
             [
-                InlineKeyboardButton("⚡️ Quick Download", callback_data=f"ytdl|{url}|default"),
-                InlineKeyboardButton("✏️ Custom Name", callback_data=f"ytdl|{url}|rename")
+                InlineKeyboardButton("🎥 Video", callback_data=f"ytdl_video|{url}"),
+                InlineKeyboardButton("🎵 Audio", callback_data=f"ytdl_audio|{url}")
             ],
             [
+                InlineKeyboardButton("✏️ Custom Name", callback_data=f"ytdl|{url}|rename"),
                 InlineKeyboardButton("❌ Cancel", callback_data="cancel")
             ]
         ])
@@ -591,20 +592,7 @@ async def callback_handler(client, callback_query):
                 
                 if download_type == "default":
                     # Quick download (video)
-                    keyboard = InlineKeyboardMarkup([
-                        [
-                            InlineKeyboardButton("🎥 Video", callback_data=f"ytdl_video|{url}"),
-                            InlineKeyboardButton("🎵 Audio", callback_data=f"ytdl_audio|{url}")
-                        ],
-                        [
-                            InlineKeyboardButton("❌ Cancel", callback_data="cancel")
-                        ]
-                    ])
-                    
-                    await message.edit_text(
-                        "**Choose Download Type:**", 
-                        reply_markup=keyboard
-                    )
+                    await download_youtube(client, message, url, "video")
                 elif download_type == "rename":
                     # Custom name for YouTube download
                     pending_renames[callback_query.from_user.id] = {
@@ -616,42 +604,6 @@ async def callback_handler(client, callback_query):
                         "• Send the name you want (without extension)\n"
                         "• Or send /cancel to abort"
                     )
-            return
-        
-        # YouTube video and audio download
-        if data.startswith("ytdl_video|") or data.startswith("ytdl_audio|"):
-            url = data.split("|")[1]
-            
-            if data.startswith("ytdl_video|"):
-                # Trigger video download
-                await callback_query.message.reply_to_message.delete()
-                await callback_query.message.delete()
-                
-                ydl_opts = {
-                    "format": "best[ext=mp4]",
-                    "outtmpl": "%(title)s - %(extractor)s-%(id)s.%(ext)s",
-                    "writethumbnail": True,
-                }
-                
-                with YoutubeDL(ydl_opts) as ydl:
-                    info_dict = ydl.extract_info(url, download=False)
-                    await download_youtube(client, callback_query.message, url, "video")
-            
-            elif data.startswith("ytdl_audio|"):
-                # Trigger audio download
-                await callback_query.message.reply_to_message.delete()
-                await callback_query.message.delete()
-                
-                ydl_opts = {
-                    "format": "bestaudio",
-                    "outtmpl": "%(title)s - %(extractor)s-%(id)s.%(ext)s",
-                    "writethumbnail": True,
-                }
-                
-                with YoutubeDL(ydl_opts) as ydl:
-                    info_dict = ydl.extract_info(url, download=False)
-                    await download_youtube(client, callback_query.message, url, "audio")
-            
             return
         
         # Cancel button handler

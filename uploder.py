@@ -4,8 +4,20 @@ import uuid
 import time
 import logging
 import asyncio
-import aiohttp
+
+from pyrogram import Client, filters
+from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message
+
+import yt_dlp
+
+from config import Config, START_TEXT, HELP_TEXT, ABOUT_TEXT
+from plugins.utils import get_filename, get_file_size
+from helpers.utils import async_download_file
+
 from pyrogram.enums import ParseMode
+from pyrogram.errors import FloodWait
+import math
+import aiohttp
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message
 from pyrogram.errors import FloodWait
@@ -609,9 +621,33 @@ async def callback_handler(client, callback_query):
                 progress_msg = await message.reply_text("📥 **Downloading file...**")
                 
                 try:
-                    # Attempt to download the file
-                    await handle_download(client, progress_msg, url)
+                    # Get filename from URL
+                    filename = await get_filename(url) or "downloaded_file"
+                    
+                    # Download file
+                    file_path = await async_download_file(
+                        url, 
+                        filename, 
+                        progress=progress_for_pyrogram, 
+                        progress_args=(progress_msg, "Downloading", time.time())
+                    )
+                    
+                    # Send file with thumbnail
+                    await send_file_with_thumbnail(
+                        client, 
+                        message.chat.id, 
+                        file_path, 
+                        filename, 
+                        caption="📥 File Downloaded", 
+                        progress=progress_for_pyrogram, 
+                        progress_args=(progress_msg, "Uploading", time.time())
+                    )
+                    
+                    # Clean up
+                    os.remove(file_path)
                     del pending_downloads[file_id]
+                    await progress_msg.delete()
+                
                 except Exception as e:
                     await progress_msg.edit_text(f"❌ **Download failed:** {str(e)}")
                     logging.error(f"Direct download error: {str(e)}")

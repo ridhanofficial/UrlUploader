@@ -595,6 +595,9 @@ async def callback_handler(client, callback_query):
                         [
                             InlineKeyboardButton("🎥 Video", callback_data=f"ytdl_video|{url}"),
                             InlineKeyboardButton("🎵 Audio", callback_data=f"ytdl_audio|{url}")
+                        ],
+                        [
+                            InlineKeyboardButton("❌ Cancel", callback_data="cancel")
                         ]
                     ])
                     
@@ -651,6 +654,11 @@ async def callback_handler(client, callback_query):
             
             return
         
+        # Cancel button handler
+        if data == "cancel":
+            await message.edit_text("❌ **Download cancelled**")
+            return
+        
         # Existing callback handlers
         if data == "start":
             keyboard = InlineKeyboardMarkup([
@@ -670,8 +678,6 @@ async def callback_handler(client, callback_query):
                 START_TEXT.format(callback_query.from_user.first_name),
                 reply_markup=keyboard
             )
-        
-        # Add other existing callback handlers here
         
     except Exception as e:
         logging.error(f"Callback handler error: {str(e)}")

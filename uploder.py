@@ -544,109 +544,159 @@ user = Client(
     workers=2  # Reduced workers to prevent overload
 )
 
+@bot.on_message(filters.command(["start"]) & filters.private)
+async def start_command(client, message: Message):
+    """
+    Handle /start command
+    
+    :param client: Pyrogram client
+    :param message: Incoming message
+    """
+    try:
+        # Delete the user's command message
+        try:
+            await client.delete_messages(
+                chat_id=message.chat.id, 
+                message_ids=[message.id]
+            )
+        except Exception as delete_error:
+            logging.warning(f"Could not delete start command message: {delete_error}")
+        
+        # Get user info
+        status, storage, features = await get_user_info(message.from_user.id)
+        
+        # Create keyboard
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("⚙️ Settings", callback_data="settings"),
+                InlineKeyboardButton("❓ Help", callback_data="help")
+            ],
+            [
+                InlineKeyboardButton("🤖 About", callback_data="about")
+            ],
+            [
+                InlineKeyboardButton("💫 Support", url="https://t.me/your_support_group"),
+                InlineKeyboardButton("🤝 Join Channel", url="https://t.me/your_channel")
+            ],
+            [
+                InlineKeyboardButton("❌ Close", callback_data="close")
+            ]
+        ])
+        
+        # Send welcome message
+        welcome_message = await client.send_message(
+            chat_id=message.chat.id,
+            text=START_TEXT.format(
+                first_name=message.from_user.first_name,
+                status=status,
+                storage=storage,
+                features=features
+            ),
+            reply_markup=keyboard,
+            disable_web_page_preview=True
+        )
+        
+        return welcome_message
+    
+    except Exception as e:
+        logging.error(f"Start command error: {str(e)}")
+        try:
+            await message.reply_text(f"❌ An error occurred: {str(e)}")
+        except:
+            pass
+
 @bot.on_message(filters.command(["help"]) & filters.private)
 async def help_command(client, message: Message):
-    # Store the original message ID
-    original_message_id = message.id
-
-    # Delete only the user's command message
-    try:
-        await client.delete_messages(
-            chat_id=message.chat.id, 
-            message_ids=[original_message_id]
-        )
-    except Exception:
-        pass
-
-    # Create keyboard for help
-    keyboard = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("🏠 Back to Start", callback_data="start")
-        ]
-    ])
+    """
+    Handle /help command
     
-    # Send help message
-    await client.send_message(
-        chat_id=message.chat.id,
-        text=HELP_TEXT,
-        reply_markup=keyboard,
-        disable_web_page_preview=True
-    )
+    :param client: Pyrogram client
+    :param message: Incoming message
+    """
+    try:
+        # Delete the user's command message
+        try:
+            await client.delete_messages(
+                chat_id=message.chat.id, 
+                message_ids=[message.id]
+            )
+        except Exception as delete_error:
+            logging.warning(f"Could not delete help command message: {delete_error}")
+        
+        # Create keyboard
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("🏠 Back to Start", callback_data="start")
+            ]
+        ])
+        
+        # Send help message
+        help_message = await client.send_message(
+            chat_id=message.chat.id,
+            text=HELP_TEXT,
+            reply_markup=keyboard,
+            disable_web_page_preview=True
+        )
+        
+        return help_message
+    
+    except Exception as e:
+        logging.error(f"Help command error: {str(e)}")
+        try:
+            await message.reply_text(f"❌ An error occurred: {str(e)}")
+        except:
+            pass
 
 @bot.on_message(filters.command(["about"]) & filters.private)
 async def about_command(client, message: Message):
-    # Store the original message ID
-    original_message_id = message.id
-
-    # Delete only the user's command message
+    """
+    Handle /about command
+    
+    :param client: Pyrogram client
+    :param message: Incoming message
+    """
     try:
-        await client.delete_messages(
-            chat_id=message.chat.id, 
-            message_ids=[original_message_id]
+        # Delete the user's command message
+        try:
+            await client.delete_messages(
+                chat_id=message.chat.id, 
+                message_ids=[message.id]
+            )
+        except Exception as delete_error:
+            logging.warning(f"Could not delete about command message: {delete_error}")
+        
+        # Create keyboard
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("🏠 Back to Start", callback_data="start")
+            ]
+        ])
+        
+        # Send about message
+        about_message = await client.send_message(
+            chat_id=message.chat.id,
+            text=ABOUT_TEXT,
+            reply_markup=keyboard,
+            disable_web_page_preview=True
         )
-    except Exception:
-        pass
-
-    # Create keyboard for about
-    keyboard = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("🏠 Back to Start", callback_data="start")
-        ]
-    ])
+        
+        return about_message
     
-    # Send about message
-    await client.send_message(
-        chat_id=message.chat.id,
-        text=ABOUT_TEXT,
-        reply_markup=keyboard,
-        disable_web_page_preview=True
-    )
-
-@bot.on_message(filters.command(["start"]) & filters.private)
-async def start_command(client, message: Message):
-    # Store the original message ID
-    original_message_id = message.id
-
-    # Delete only the user's command message
-    try:
-        await client.delete_messages(
-            chat_id=message.chat.id, 
-            message_ids=[original_message_id]
-        )
-    except Exception:
-        pass
-
-    status, storage, features = await get_user_info(message.from_user.id)
-    
-    keyboard = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("⚙️ Settings", callback_data="settings"),
-            InlineKeyboardButton("❓ Help", callback_data="help")
-        ],
-        [
-            InlineKeyboardButton("🤖 About", callback_data="about")
-        ],
-        [
-            InlineKeyboardButton("💫 Support", url="https://t.me/your_support")
-        ]
-    ])
-    
-    # Send the response and store the bot's message
-    await client.send_message(
-        chat_id=message.chat.id,
-        text=START_TEXT.format(
-            first_name=message.from_user.first_name,
-            status=status,
-            storage=storage,
-            features=features
-        ),
-        reply_markup=keyboard,
-        disable_web_page_preview=True
-    )
+    except Exception as e:
+        logging.error(f"About command error: {str(e)}")
+        try:
+            await message.reply_text(f"❌ An error occurred: {str(e)}")
+        except:
+            pass
 
 @bot.on_callback_query()
 async def callback_handler(client, callback_query):
-    """Handle all inline button callbacks"""
+    """
+    Handle all inline button callbacks
+    
+    :param client: Pyrogram client
+    :param callback_query: Incoming callback query
+    """
     try:
         # Log the callback data for debugging
         logging.info(f"Received callback data: {callback_query.data}")
@@ -675,7 +725,11 @@ async def callback_handler(client, callback_query):
                     InlineKeyboardButton("🤖 About", callback_data="about")
                 ],
                 [
-                    InlineKeyboardButton("💫 Support", url="https://t.me/your_support_group")
+                    InlineKeyboardButton("💫 Support", url="https://t.me/your_support_group"),
+                    InlineKeyboardButton("🤝 Join Channel", url="https://t.me/your_channel")
+                ],
+                [
+                    InlineKeyboardButton("❌ Close", callback_data="close")
                 ]
             ])
             
@@ -727,6 +781,14 @@ async def callback_handler(client, callback_query):
                 "**⚙️ Settings**\n\nNo settings configured yet.",
                 reply_markup=keyboard
             )
+        
+        elif data == "close":
+            # Delete the message when close button is pressed
+            try:
+                await message.delete()
+            except Exception as e:
+                logging.error(f"Error deleting message: {str(e)}")
+                await callback_query.answer("Could not close the message.", show_alert=True)
         
         # Handling download and rename buttons
         elif data.startswith("default|"):

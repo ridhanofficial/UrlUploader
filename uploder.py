@@ -211,143 +211,155 @@ async def get_file_size(url):
         pass
     return 0
 
-async def async_download_file(url, filename, progress=None, progress_args=None):
-    """
-    Download a file using aiohttp with progress tracking
+class FastDownloadEngine:
+    def __init__(self, logger=None):
+        """
+        Initialize download engine with optional logger
+        
+        :param logger: Optional custom logger
+        """
+        self.logger = logger or logging.getLogger(__name__)
     
-    :param url: URL of the file to download
-    :param filename: Name of the file to save
-    :param progress: Optional progress callback function
-    :param progress_args: Optional arguments for progress callback
-    :return: Path to the downloaded file
-    """
-    download_directory = "Download"
-    os.makedirs(download_directory, exist_ok=True)
-    
-    file_path = os.path.join(download_directory, filename)
-    
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url) as response:
-            if response.status != 200:
-                raise Exception(f"Download failed with status {response.status}")
+    async def download_file(
+        self, 
+        url, 
+        filename=None, 
+        progress_callback=None
+    ):
+        """
+        Download file from URL with progress tracking
+        
+        :param url: URL to download from
+        :param filename: Optional custom filename
+        :param progress_callback: Optional progress tracking function
+        :return: Path to downloaded file
+        """
+        try:
+            # Generate unique filename if not provided
+            if not filename:
+                filename = os.path.join(
+                    DOWNLOAD_LOCATION, 
+                    f"{str(uuid.uuid4())}.bin"
+                )
             
-            total_size = int(response.headers.get('content-length', 0))
-            downloaded_size = 0
+            # Ensure download directory exists
+            os.makedirs(os.path.dirname(filename), exist_ok=True)
             
-            async with aiofiles.open(file_path, mode='wb') as f:
-                async for chunk in response.content.iter_chunked(1024):
-                    await f.write(chunk)
-                    downloaded_size += len(chunk)
+            # Start download
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, allow_redirects=True) as response:
+                    # Validate response
+                    if response.status != 200:
+                        raise ValueError(f"Invalid HTTP status: {response.status}")
                     
-                    # Call progress callback if provided
-                    if progress and progress_args:
-                        try:
-                            await progress(downloaded_size, total_size, *progress_args)
-                        except Exception as e:
-                            logging.error(f"Progress callback error: {e}")
-    
-    return file_path
-
-async def send_file_with_thumbnail(client, chat_id, document, file_name, caption, progress=None, progress_args=None):
-    """
-    Send file without thumbnail
-    
-    :param client: Pyrogram client
-    :param chat_id: Destination chat ID
-    :param document: Path to the document
-    :param file_name: Name of the file
-    :param caption: Caption for the file
-    :param progress: Optional progress callback function
-    :param progress_args: Optional arguments for progress callback
-    :return: Sent message
-    """
-    start_time = time.time()
-    progress_message = None
-    
-    try:
-        # Validate input parameters
-        if not document or not os.path.exists(document):
-            raise ValueError(f"Invalid document path: {document}")
+                    # Get total file size
+                    total_size = int(response.headers.get('content-length', 0))
+                    downloaded = 0
+                    
+                    # Open file for writing
+                    async with aiofiles.open(filename, 'wb') as f:
+                        start_time = time.time()
+                        
+                        async for chunk in response.content.iter_chunked(1024):
+                            if chunk:
+                                await f.write(chunk)
+                                downloaded += len(chunk)
+                                
+                                # Progress tracking
+                                if progress_callback and callable(progress_callback):
+                                    try:
+                                        progress = (downloaded / total_size) * 100 if total_size > 0 else 0
+                                        await progress_callback(
+                                            progress, 
+                                            downloaded, 
+                                            total_size
+                                        )
+                                    except Exception as progress_error:
+                                        self.logger.error(f"Progress tracking error: {progress_error}")
+                        
+                        # Verify download
+                        if total_size > 0 and downloaded != total_size:
+                            raise ValueError(f"Incomplete download: {downloaded}/{total_size} bytes")
+            
+            return filename
         
-        # Delete the progress message from download
-        try:
-            await progress_args[0].delete()
-        except Exception as delete_error:
-            logging.warning(f"Could not delete progress message: {delete_error}")
-        
-        # Send new progress message for upload
-        progress_message = await client.send_message(
-            chat_id=chat_id, 
-            text="**🔄 Preparing Upload...**"
-        )
-        
-        try:
-            # Validate file size
-            file_size = os.path.getsize(document)
+        except Exception as e:
+            # Clean up partial download
+            if os.path.exists(filename):
+                os.remove(filename)
             
-            # Ensure file is not empty
-            if file_size == 0:
-                raise ValueError("File is empty")
-            
-            # Detailed logging
-            logging.info(f"Uploading file: {document}")
-            logging.info(f"File name: {file_name}")
-            logging.info(f"File size: {file_size} bytes")
-            
-            # Upload the file
-            uploaded_file = await client.send_document(
-                chat_id=chat_id,
-                document=document,
-                file_name=file_name,
-                caption=caption,
-                progress=progress,
-                progress_args=(
-                    "📤 Uploading",
-                    progress_message,
-                    start_time
-                ),
-                force_document=True
-            )
-            
-            # Delete the progress message
-            if hasattr(progress_message, 'delete'):
-                await progress_message.delete()
-            
-            # Clean up the downloaded file
-            try:
-                os.remove(document)
-                logging.info(f"Deleted local file: {document}")
-            except Exception as cleanup_error:
-                logging.error(f"File cleanup error: {cleanup_error}")
-            
-            return uploaded_file
-            
-        except Exception as upload_error:
-            # Detailed error logging
-            logging.error(f"Upload error: {upload_error}")
-            logging.error(f"Error details: {traceback.format_exc()}")
-            
-            # Update progress message with error
-            try:
-                await progress_message.edit(
-                    f"**❌ Upload Failed!**\n\n`{str(upload_error)}`"
-                )
-            except Exception as edit_error:
-                logging.warning(f"Could not edit progress message: {edit_error}")
-                await client.send_message(
-                    chat_id=chat_id, 
-                    text=f"**❌ Upload Failed!**\n\n`{str(upload_error)}`"
-                )
-            
+            self.logger.error(f"Download error: {e}")
             raise
-            
-    except Exception as e:
-        logging.error(f"General upload error: {e}")
+    
+    async def download_youtube(
+        self, 
+        url, 
+        filename=None, 
+        progress_callback=None
+    ):
+        """
+        Download YouTube video/audio with progress tracking
+        
+        :param url: YouTube URL
+        :param filename: Optional custom filename
+        :param progress_callback: Optional progress tracking function
+        :return: Path to downloaded file
+        """
         try:
-            await message.reply_text(f"❌ **Upload Process Failed!**\n\n`{str(e)}`")
-        except:
-            pass
-        return None
+            # Prepare YouTube download options
+            ydl_opts = {
+                'format': 'best',
+                'noplaylist': True,
+                'quiet': True,
+                'no_warnings': True,
+                'progress_hooks': [],
+                'outtmpl': os.path.join(
+                    DOWNLOAD_LOCATION, 
+                    f"{str(uuid.uuid4())}_{filename or '%(title)s.%(ext)s'}"
+                )
+            }
+            
+            # Progress tracking hook
+            def progress_hook(d):
+                try:
+                    if d['status'] == 'downloading':
+                        downloaded_bytes = d.get('downloaded_bytes', 0)
+                        total_bytes = d.get('total_bytes') or d.get('total_bytes_estimate', 0)
+                        
+                        if total_bytes > 0:
+                            progress = (downloaded_bytes / total_bytes) * 100
+                            
+                            # Async progress callback
+                            if progress_callback and callable(progress_callback):
+                                asyncio.create_task(
+                                    progress_callback(
+                                        progress, 
+                                        downloaded_bytes, 
+                                        total_bytes
+                                    )
+                                )
+                except Exception as e:
+                    self.logger.error(f"YouTube download progress error: {e}")
+            
+            # Add progress hook
+            ydl_opts['progress_hooks'].append(progress_hook)
+            
+            # Perform download
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=True)
+                
+                # Get downloaded file path
+                if 'requested_downloads' in info:
+                    downloaded_file = info['requested_downloads'][0]['filepath']
+                else:
+                    # Fallback to finding the file
+                    downloaded_file = ydl.prepare_filename(info)
+                
+                return downloaded_file
+        
+        except Exception as e:
+            self.logger.error(f"YouTube download error: {e}")
+            raise
 
 async def handle_download_or_upload(
     client, 
@@ -1639,11 +1651,11 @@ class FastDownloadEngine:
             async with aiohttp.ClientSession() as session:
                 async with session.get(url, timeout=aiohttp.ClientTimeout(total=timeout)) as response:
                     # Validate response
-                    if response.status not in [200, 206]:
+                    if response.status != 200:
                         raise ValueError(f"Invalid HTTP status: {response.status}")
                     
                     # Get total file size
-                    total_size = int(response.headers.get('Content-Length', 0))
+                    total_size = int(response.headers.get('content-length', 0))
                     downloaded = 0
                     
                     # Open file for writing
@@ -1652,10 +1664,12 @@ class FastDownloadEngine:
                             await f.write(chunk)
                             downloaded += len(chunk)
                             
-                            # Progress tracking
+                            # Call progress callback if provided
                             if progress_callback and total_size > 0:
-                                progress = (downloaded / total_size) * 100
-                                await progress_callback(progress, downloaded, total_size)
+                                try:
+                                    await progress_callback(downloaded, total_size)
+                                except Exception as e:
+                                    self.logger.error(f"Progress callback error: {e}")
                     
                     return file_path
         
@@ -1760,9 +1774,9 @@ class FastDownloadEngine:
             
             # Progress tracking hook
             def progress_hook(d):
-                if d['status'] == 'downloading' and progress_callback:
+                if d['status'] == 'downloading':
                     downloaded_bytes = d.get('downloaded_bytes', 0)
-                    total_bytes = d.get('total_bytes_estimate', 0)
+                    total_bytes = d.get('total_bytes') or d.get('total_bytes_estimate', 0)
                     
                     if total_bytes > 0:
                         progress = (downloaded_bytes / total_bytes) * 100
@@ -1776,7 +1790,7 @@ class FastDownloadEngine:
             # Download with yt-dlp
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 try:
-                    info_dict = ydl.extract_info(url, download=True)
+                    info = ydl.extract_info(url, download=True)
                 except Exception as extract_error:
                     # Advanced error handling
                     error_msg = str(extract_error)
@@ -1788,12 +1802,12 @@ class FastDownloadEngine:
                         ydl_opts['cookiefile'] = None
                         
                         with yt_dlp.YoutubeDL(ydl_opts) as fallback_ydl:
-                            info_dict = fallback_ydl.extract_info(url, download=True)
+                            info = fallback_ydl.extract_info(url, download=True)
                     else:
                         raise
                 
                 # Get downloaded files
-                downloaded_files = ydl.get_download_path(info_dict)
+                downloaded_files = ydl.get_download_path(info)
                 
                 if not downloaded_files:
                     raise ValueError("No files downloaded")
@@ -1968,3 +1982,47 @@ async def safe_edit_progress(message, text):
             await message.reply_text(text)
         except Exception as reply_error:
             logging.error(f"Failed to update progress: {reply_error}")
+
+async def progress_for_pyrogram(current, total, ud_type, message, start):
+    try:
+        # Ensure message is a valid message object
+        if not hasattr(message, 'edit'):
+            logging.error(f"Invalid message object: {type(message)}")
+            return
+        
+        now = time.time()
+        diff = now - start
+        
+        if round(diff % 10.00) == 0 or current == total:
+            try:
+                percentage = current * 100 / total if total > 0 else 0
+                speed = current / diff if diff > 0 else 0
+                elapsed_time = round(diff) * 1000
+                time_to_completion = round((total - current) / speed) * 1000 if speed > 0 else 0
+                estimated_total_time = elapsed_time + time_to_completion
+
+                elapsed_time = TimeFormatter(milliseconds=elapsed_time)
+                estimated_total_time = TimeFormatter(milliseconds=estimated_total_time)
+
+                progress = "[{0}{1}] \nP: {2}%\n".format(
+                    ''.join(["█" for _ in range(math.floor(percentage / 5))]),
+                    ''.join(["░" for _ in range(20 - math.floor(percentage / 5))]),
+                    round(percentage, 2))
+
+                tmp = progress + "{0} of {1}\nSpeed: {2}/s\nETA: {3}\n".format(
+                    humanbytes(current),
+                    humanbytes(total),
+                    humanbytes(speed),
+                    estimated_total_time if estimated_total_time != '' else "0 s"
+                )
+                
+                # Safely edit message
+                await message.edit(
+                    text=f"{ud_type}\n {tmp}",
+                    parse_mode=ParseMode.MARKDOWN
+                )
+            except Exception as edit_error:
+                logging.error(f"Error updating progress: {edit_error}")
+    except Exception as e:
+        logging.error(f"Progress tracking error: {e}")
+        logging.error(f"Error details: {traceback.format_exc()}")

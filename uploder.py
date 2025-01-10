@@ -875,7 +875,21 @@ async def start_bot():
                 print(f"Failed to start bot: {str(e)}")
                 raise e
 
-if __name__ == "__main__":
+def main():
+    """Main function to run the bot"""
     user.start()
-    asyncio.get_event_loop().run_until_complete(start_bot())
-    bot.idle()
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(start_bot())
+    
+    # Keep the bot running
+    try:
+        loop.run_forever()
+    except KeyboardInterrupt:
+        print("Bot stopped by user")
+    finally:
+        bot.stop()
+        user.stop()
+        loop.close()
+
+if __name__ == "__main__":
+    main()

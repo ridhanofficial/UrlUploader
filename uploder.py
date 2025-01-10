@@ -146,15 +146,9 @@ async def get_concurrent_downloads(user_id: int) -> int:
     return 5
 
 async def save_thumb(user_id: int, thumb_path: str):
-    """
-    Save thumbnail path for a specific user
-    This function should be implemented to store user-specific thumbnails
-    """
     try:
-        # Create a directory for user thumbnails if it doesn't exist
         os.makedirs(THUMB_LOCATION, exist_ok=True)
         
-        # Store the thumbnail path (you might want to use a database in a real-world scenario)
         user_thumb_file = os.path.join(THUMB_LOCATION, f"{user_id}_thumb.txt")
         
         with open(user_thumb_file, 'w') as f:
@@ -166,10 +160,6 @@ async def save_thumb(user_id: int, thumb_path: str):
         return False
 
 def get_thumb(user_id: int):
-    """
-    Retrieve thumbnail path for a specific user
-    Returns None if no thumbnail is found
-    """
     try:
         user_thumb_file = os.path.join(THUMB_LOCATION, f"{user_id}_thumb.txt")
         
@@ -177,7 +167,6 @@ def get_thumb(user_id: int):
             with open(user_thumb_file, 'r') as f:
                 thumb_path = f.read().strip()
             
-            # Verify the thumbnail file exists
             if os.path.exists(thumb_path):
                 return thumb_path
         
@@ -187,38 +176,28 @@ def get_thumb(user_id: int):
         return None
 
 async def save_photo(client, message):
-    """Save photo as thumbnail"""
-    # Ensure the thumb directory exists
     os.makedirs(THUMB_LOCATION, exist_ok=True)
     
     try:
-        # Check if the message is a reply to a photo
         if not message.reply_to_message or not message.reply_to_message.photo:
             await message.reply_text("❌ Please reply to a photo to set it as thumbnail.")
             return
         
-        # Get the photo from the replied message
         photo = message.reply_to_message.photo
-        
-        # Get the largest photo size
         largest_photo = photo[-1]
         
-        # Generate a unique filename for the thumbnail
         thumb_path = os.path.join(
             THUMB_LOCATION, 
             f"{message.from_user.id}_thumb.jpg"
         )
         
-        # Download the photo
         await client.download_media(
             message.reply_to_message, 
             file_name=thumb_path
         )
         
-        # Save thumbnail for the user
         await save_thumb(message.from_user.id, thumb_path)
         
-        # Send confirmation
         await message.reply_text(
             "✅ **Thumbnail saved successfully!**\n"
             "This thumbnail will be used for your future uploads."

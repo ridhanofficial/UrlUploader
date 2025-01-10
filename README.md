@@ -84,10 +84,8 @@ AUTH_USERS - Your Telegram ID
 
 ## Premium Features
 
-- 📈 Increased file size limit (10GB)
-- 🔄 More concurrent downloads (5)
+- 📈 Increased file size limit (4GB)
 - ⚡️ Priority processing
-- 📞 Premium support
 
 Contact the bot owner to get premium access.
 

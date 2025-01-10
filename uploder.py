@@ -244,7 +244,7 @@ def TimeFormatter(milliseconds: int) -> str:
         ((str(milliseconds) + "ms, ") if milliseconds else "")
     return tmp[:-2]
 
-# Update the download handlers to use the correct progress callback
+# Update the download handlers to handle completion properly
 async def async_download_file(url, filename, progress=None, progress_args=None):
     """Download file using aiohttp"""
     try:
@@ -274,6 +274,13 @@ async def async_download_file(url, filename, progress=None, progress_args=None):
                                 except Exception:
                                     pass
                 
+                # Send completion message
+                if progress and progress_args:
+                    try:
+                        await progress_args[0].edit("**✅ Download Complete! Starting Upload...**")
+                    except Exception:
+                        pass
+                
                 return filename
     except Exception as e:
         if os.path.exists(filename):
@@ -285,34 +292,123 @@ async def send_file_with_thumbnail(client, chat_id, document, file_name, caption
     """Send file with user's thumbnail if available"""
     thumb = get_thumb(chat_id)
     start_time = time.time()
+    
     try:
-        await client.send_document(
-            chat_id=chat_id,
-            document=document,
-            thumb=thumb,
-            file_name=file_name,
-            caption=caption,
-            progress=progress,
-            progress_args=(
-                "📤 Uploading",
-                progress_args[0],
-                start_time
+        # Delete the progress message from download
+        try:
+            await progress_args[0].delete()
+        except Exception:
+            pass
+        
+        # Send new progress message for upload
+        progress_message = await client.send_message(chat_id, "**🔄 Preparing Upload...**")
+        
+        try:
+            await client.send_document(
+                chat_id=chat_id,
+                document=document,
+                thumb=thumb,
+                file_name=file_name,
+                caption=caption,
+                progress=progress,
+                progress_args=(
+                    "📤 Uploading",
+                    progress_message,
+                    start_time
+                )
             )
-        )
+            # Delete progress message after upload
+            await progress_message.delete()
+        except Exception as e:
+            # If sending with thumbnail fails, try without it
+            await client.send_document(
+                chat_id=chat_id,
+                document=document,
+                file_name=file_name,
+                caption=caption,
+                progress=progress,
+                progress_args=(
+                    "📤 Uploading",
+                    progress_message,
+                    start_time
+                )
+            )
+            # Delete progress message after upload
+            await progress_message.delete()
+            
     except Exception as e:
-        # If sending with thumbnail fails, try without it
-        await client.send_document(
+        try:
+            await progress_message.edit(f"**❌ Upload Failed!**\n\n`{str(e)}`")
+        except Exception:
+            pass
+        raise e
+
+# Update the message handlers
+@bot.on_message(filters.text & filters.private & ~filters.command("start") & ~filters.command("help") & ~filters.command("about"))
+async def handle_message(client, message: Message):
+    if not await force_sub(client, message):
+        return
+        
+    text = message.text.strip()
+    chat_id = message.chat.id
+    
+    if not re.match(URL_REGEX, text):
+        if text in pending_renames:
+            # Handle rename logic...
+            pass
+        else:
+            await message.reply_text("❌ **Please send me a valid direct download link!**")
+        return
+        
+    url = text
+    
+    try:
+        # Delete previous messages
+        await message.delete()
+    except Exception:
+        pass
+        
+    try:
+        # Send initial progress message
+        progress_msg = await client.send_message(
             chat_id=chat_id,
-            document=document,
-            file_name=file_name,
-            caption=caption,
-            progress=progress,
-            progress_args=(
-                "📤 Uploading",
-                progress_args[0],
-                start_time
-            )
+            text="**🔄 Processing URL...**"
         )
+        
+        # Start download
+        filename = await get_filename(url)
+        start_time = time.time()
+        
+        downloaded_file = await async_download_file(
+            url,
+            filename,
+            progress=progress_for_pyrogram,
+            progress_args=(progress_msg, start_time)
+        )
+        
+        # Upload file
+        await send_file_with_thumbnail(
+            client,
+            chat_id,
+            downloaded_file,
+            filename,
+            f"📤 **Upload Complete!**\n\n**Filename:** `{filename}`",
+            progress_for_pyrogram,
+            (progress_msg, time.time())
+        )
+        
+        # Cleanup
+        try:
+            os.remove(downloaded_file)
+        except Exception:
+            pass
+            
+    except Exception as e:
+        error_msg = f"**❌ Download Failed!**\n\n`{str(e)}`"
+        try:
+            await progress_msg.edit(error_msg)
+        except Exception:
+            await client.send_message(chat_id, error_msg)
 
 # Command handlers
 @bot.on_message(filters.command(["start"]) & filters.private)
@@ -578,7 +674,6 @@ async def handle_message(client, message: Message):
             )
             
             # Start upload process
-            upload_start_time = time.time()
             await send_file_with_thumbnail(
                 client,
                 chat_id,
@@ -586,7 +681,7 @@ async def handle_message(client, message: Message):
                 new_name_with_ext,
                 f"📤 **Upload Complete!**\n\n**Filename:** `{new_name_with_ext}`",
                 progress_for_pyrogram,
-                (status_msg, upload_start_time)
+                (status_msg, time.time())
             )
             
             # Cleanup
@@ -733,3 +828,4 @@ async def broadcast_message(client, message: Message):
 if __name__ == "__main__":
     user.start()
     bot.run()
+

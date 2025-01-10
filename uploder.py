@@ -118,8 +118,9 @@ Thanks for using our Bot!
 ©️ 2025 All Rights Reserved
 """
 
-@bot.on_message(filters.command("start") & filters.private)
-async def start_message(client, message: Message):
+# Command handlers
+@bot.on_message(filters.command(["start"]) & filters.private)
+async def start_command(client, message: Message):
     chat_id = message.chat.id
     
     keyboard = InlineKeyboardMarkup([
@@ -139,26 +140,186 @@ async def start_message(client, message: Message):
         disable_web_page_preview=True
     )
 
-@bot.on_message(filters.text & filters.private)
-async def handle_message(client, message: Message):
-    chat_id = message.chat.id
-    text = message.text.strip()
+@bot.on_message(filters.command(["help"]) & filters.private)
+async def help_command(client, message: Message):
+    keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🏠 Back to Start", callback_data="start"),
+            InlineKeyboardButton("📊 About", callback_data="about")
+        ]
+    ])
+    
+    await message.reply_text(
+        HELP_TEXT,
+        reply_markup=keyboard,
+        disable_web_page_preview=True
+    )
 
-    if chat_id in pending_renames:
-        new_name = text
+@bot.on_message(filters.command(["about"]) & filters.private)
+async def about_command(client, message: Message):
+    keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🏠 Back to Start", callback_data="start"),
+            InlineKeyboardButton("❓ Help", callback_data="help")
+        ]
+    ])
+    
+    await message.reply_text(
+        ABOUT_TEXT,
+        reply_markup=keyboard,
+        disable_web_page_preview=True
+    )
 
-        if not new_name:
-            await message.reply_text("**Invalid filename. Please provide a valid name.**")
+# Callback query handler for inline buttons
+@bot.on_callback_query()
+async def callback_handler(client, callback_query):
+    data = callback_query.data
+    
+    if data == "start":
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("✨ Help", callback_data="help"),
+                InlineKeyboardButton("📊 About", callback_data="about")
+            ],
+            [
+                InlineKeyboardButton("🌟 Channel", url="https://t.me/your_channel"),
+                InlineKeyboardButton("💫 Support", url="https://t.me/your_support")
+            ]
+        ])
+        
+        await callback_query.message.edit_text(
+            START_TEXT,
+            reply_markup=keyboard,
+            disable_web_page_preview=True
+        )
+    
+    elif data == "help":
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("🏠 Back to Start", callback_data="start"),
+                InlineKeyboardButton("📊 About", callback_data="about")
+            ]
+        ])
+        
+        await callback_query.message.edit_text(
+            HELP_TEXT,
+            reply_markup=keyboard,
+            disable_web_page_preview=True
+        )
+    
+    elif data == "about":
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("🏠 Back to Start", callback_data="start"),
+                InlineKeyboardButton("❓ Help", callback_data="help")
+            ]
+        ])
+        
+        await callback_query.message.edit_text(
+            ABOUT_TEXT,
+            reply_markup=keyboard,
+            disable_web_page_preview=True
+        )
+    
+    elif "|" in data:
+        # Handle file download/rename callbacks
+        action, unique_id = data.split("|")
+        if action == "cancel":
+            await callback_query.message.edit_text(
+                "**❌ Download Cancelled**\n\n"
+                "Send another URL to start a new download."
+            )
             return
-
-        url = pending_renames.pop(chat_id)
-        base_name, ext = os.path.splitext(url.split('/')[-1].split('?')[0])
-        new_name_with_ext = f"{new_name}{ext}"
-
+        
+        url = callback_query.message.reply_to_message.text.strip()
+        
         try:
-            start_time = time.time()
-            editable_text = await client.send_message(chat_id, "📥 Downloading...")
+            processing_msg = await callback_query.message.edit_text(
+                "**🔄 Processing Request**\n\n"
+                "⚡️ Initializing download...\n"
+                "📊 Preparing file information..."
+            )
+            
+            file_size_bytes = await get_file_size(url)
+            file_size_readable = file_size_format(file_size_bytes)
+            
+            if file_size_bytes > MAX_FILE_SIZE:
+                await processing_msg.edit_text(
+                    "**❌ File Too Large**\n\n"
+                    "Maximum file size limit: 4GB\n"
+                    f"Detected file size: {file_size_readable}\n\n"
+                    "Please try with a smaller file."
+                )
+                return
+            
+            if action == "default":
+                # Download with original filename
+                filename = await get_filename(url)
+                start_time = time.time()
+                editable_text = await client.send_message(
+                    chat_id=callback_query.message.chat.id,
+                    text="📥 Starting Download..."
+                )
+                
+                downloaded_file = await async_download_file(
+                    url,
+                    filename,
+                    progress=progress_for_pyrogram,
+                    progress_args=progressArgs("📥 Downloading Progress", editable_text, start_time)
+                )
+                
+                upload_start_time = time.time()
+                await client.send_document(
+                    chat_id=callback_query.message.chat.id,
+                    document=downloaded_file,
+                    file_name=filename,
+                    caption="📤 Upload Complete!",
+                    progress=progress_for_pyrogram,
+                    progress_args=progressArgs("📤 Uploading Progress", editable_text, upload_start_time)
+                )
+                
+                await editable_text.delete()
+                os.remove(downloaded_file)
+            
+            elif action == "rename":
+                # Ask for new filename
+                await processing_msg.edit_text(
+                    "**✏️ Send me the new filename**\n\n"
+                    "• Send /cancel to cancel the process\n"
+                    "• The extension will be added automatically"
+                )
+                # Store the URL for later use
+                pending_renames[unique_id] = url
+        
+        except Exception as e:
+            await processing_msg.edit_text(
+                f"**❌ Error occurred:**\n\n`{str(e)}`"
+            )
+    
+    # Answer the callback query
+    await callback_query.answer()
 
+# Handle text messages (URLs and rename requests)
+@bot.on_message(filters.text & filters.private & ~filters.command)
+async def handle_message(client, message: Message):
+    text = message.text.strip()
+    
+    # Check if this is a rename request
+    for unique_id, url in pending_renames.items():
+        if text.lower() == "/cancel":
+            pending_renames.pop(unique_id)
+            await message.reply_text("❌ Process Cancelled")
+            return
+        
+        # Process rename request
+        new_name = text
+        ext = os.path.splitext(await get_filename(url))[1]
+        new_name_with_ext = new_name + ext
+        
+        start_time = time.time()
+        editable_text = await message.reply_text("📥 Starting Download...")
+        
+        try:
             downloaded_file = await async_download_file(
                 url,
                 new_name_with_ext,
@@ -167,49 +328,45 @@ async def handle_message(client, message: Message):
             )
             
             upload_start_time = time.time()
-            await message.reply_document(
-                document=downloaded_file, 
+            await client.send_document(
+                chat_id=message.chat.id,
+                document=downloaded_file,
                 file_name=new_name_with_ext,
                 caption="📤 Upload Complete!",
                 progress=progress_for_pyrogram,
                 progress_args=progressArgs("📤 Uploading Progress", editable_text, upload_start_time)
             )
-
+            
             await editable_text.delete()
             os.remove(downloaded_file)
+            pending_renames.pop(unique_id)
+            return
+        
         except Exception as e:
-            await editable_text.delete()
-            await message.reply_text(f"**{str(e)}**")
-
-    elif re.match(URL_REGEX, text) or re.match(YOUTUBE_REGEX, text):
-        url = text
+            await editable_text.edit_text(f"**❌ Error occurred:**\n\n`{str(e)}`")
+            pending_renames.pop(unique_id)
+            return
+    
+    # Handle URL
+    if re.match(URL_REGEX, text):
+        unique_id = str(uuid.uuid4())
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("⚡️ Quick Download", callback_data=f"default|{unique_id}"),
+                InlineKeyboardButton("✏️ Custom Name", callback_data=f"rename|{unique_id}")
+            ],
+            [
+                InlineKeyboardButton("❌ Cancel", callback_data=f"cancel|{unique_id}")
+            ]
+        ])
+        
         try:
-            file_size_bytes = await get_file_size(url)
-            if file_size_bytes == 0:
-                await message.reply_text("**File information is not available for this link.**")
-                return
-
-            formatted_size = file_size_format(file_size_bytes)
-
-            filename = await get_filename(url)
-            unique_id = str(uuid.uuid4())
-            pending_downloads[unique_id] = {"url": url, "filename": filename}
-
-            file_info = f"Title: `{filename}`\nSize: `{formatted_size}`"
-
-            keyboard = InlineKeyboardMarkup([
-                [
-                    InlineKeyboardButton("⚡️ Quick Download", callback_data=f"default|{unique_id}"),
-                    InlineKeyboardButton("✏️ Custom Name", callback_data=f"rename|{unique_id}")
-                ],
-                [
-                    InlineKeyboardButton("❌ Cancel", callback_data=f"cancel|{unique_id}")
-                ]
-            ])
-
+            file_size = await get_file_size(text)
+            size_text = file_size_format(file_size)
+            
             await message.reply_text(
                 f"**🔗 URL Detected!**\n\n"
-                f"📦 **File Size:** {formatted_size}\n"
+                f"📦 **File Size:** {size_text}\n"
                 f"🎯 **Choose an option:**",
                 reply_markup=keyboard
             )
@@ -281,84 +438,6 @@ async def delete_photo(client, message):
             text="You don't have a set thumbnail yet! Send a .jpg image to save as thumbnail.",
             quote=True,
         )
-
-@bot.on_callback_query(filters.regex(r"^(default|rename|settings|about|help|cancel)\|"))
-async def on_file_decision(client, callback_query):
-    action, unique_id = callback_query.data.split("|")
-    chat_id = callback_query.message.chat.id
-
-    if action == "settings":
-        await callback_query.message.edit_text(
-            "Settings are not implemented yet.\n\n"
-            "Use /thumb to set a custom thumbnail.\n"
-            "Use /delthumb to delete the custom thumbnail."
-        )
-        return
-    elif action == "about":
-        await callback_query.message.edit_text(ABOUT_TEXT)
-        return
-    elif action == "help":
-        await callback_query.message.edit_text(HELP_TEXT)
-        return
-    elif action == "cancel":
-        await callback_query.message.edit_text(
-            "**❌ Download Cancelled**\n\n"
-            "Send another URL to start a new download."
-        )
-        return
-
-    download_info = pending_downloads.get(unique_id)
-    if not download_info:
-        await callback_query.message.edit_text("**An error occurred: Invalid action.**")
-        return
-
-    url = download_info["url"]
-    filename = download_info["filename"]
-
-    try:
-        file_size_bytes = await get_file_size(url)
-        file_size_readable = file_size_format(file_size_bytes)
-
-        if file_size_bytes > MAX_FILE_SIZE:
-            await callback_query.message.edit_text(
-                "**❌ File Too Large**\n\n"
-                "Maximum file size limit: 4GB\n"
-                f"Detected file size: {file_size_readable}\n\n"
-                "Please try with a smaller file."
-            )
-            return
-            
-        if action == "default":
-            start_time = time.time()
-            editable_text = await client.send_message(chat_id, "📥 Processing your request...")
-
-            downloaded_file = await async_download_file(
-                url,
-                filename,
-                progress=progress_for_pyrogram,
-                progress_args=progressArgs("📥 Downloading Progress", editable_text, start_time)
-            )
-            
-            upload_start_time = time.time()
-            await callback_query.message.reply_document(
-                document=downloaded_file, 
-                file_name=filename,
-                caption="📤 Upload Complete!",
-                progress=progress_for_pyrogram,
-                progress_args=progressArgs("📤 Uploading Progress", editable_text, upload_start_time)
-            )
-
-            await editable_text.delete()
-            await callback_query.message.delete()
-            os.remove(downloaded_file)
-
-        elif action == "rename":
-            pending_renames[chat_id] = url
-            await callback_query.message.edit_text("✏️ Send the new name for the file")
-
-    except Exception as e:
-        await editable_text.delete()
-        await callback_query.message.edit_text(f"{str(e)}")
 
 @bot.on_message(filters.command("broadcast") & filters.user(OWNER_ID))
 async def broadcast_message(client, message: Message):

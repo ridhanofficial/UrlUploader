@@ -26,9 +26,14 @@ from config import (
     SESSION_STRING,
     MAX_FILE_SIZE,
     DOWNLOAD_LOCATION,
-    THUMB_LOCATION,
     OWNER_ID
 )
+
+# Fallback for THUMB_LOCATION if not imported
+THUMB_LOCATION = os.path.join(os.path.dirname(os.path.abspath(__file__)), "thumb")
+
+# Ensure thumbnail directory exists
+os.makedirs(THUMB_LOCATION, exist_ok=True)
 
 # Initialize bot with proper settings
 bot = Client(
@@ -311,7 +316,6 @@ async def send_file_with_thumbnail(client, chat_id, document, file_name, caption
 
 # Create required directories
 os.makedirs(DOWNLOAD_LOCATION, exist_ok=True)
-os.makedirs(THUMB_LOCATION, exist_ok=True)
 
 # Progress callback function
 async def progress_for_pyrogram(current, total, ud_type, message, start):
@@ -403,9 +407,6 @@ async def save_photo(client, message):
         # Get the photo file
         photo = message.reply_to_message.photo[-1]
         download_path = os.path.join(THUMB_LOCATION, f"{message.chat.id}_temp.jpg")
-        
-        # Create THUMB_LOCATION directory if it doesn't exist
-        os.makedirs(THUMB_LOCATION, exist_ok=True)
         
         # Download the photo
         await client.download_media(

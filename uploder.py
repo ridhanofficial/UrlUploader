@@ -23,7 +23,6 @@ from pyrogram.enums import ParseMode
 
 import yt_dlp
 import aiohttp
-import aiofiles
 
 # Import config variables directly
 from config import (
@@ -533,11 +532,11 @@ async def download_file(
                     if file_size == 0:
                         file_size = int(response.headers.get('Content-Length', 0))
                     
-                    # Open file for writing
-                    async with aiofiles.open(file_path, 'wb') as f:
+                    # Open file for writing using standard file operations
+                    with open(file_path, 'wb') as f:
                         downloaded = 0
                         async for chunk in response.content.iter_chunked(64 * 1024):  # 64KB chunks
-                            await f.write(chunk)
+                            f.write(chunk)
                             downloaded += len(chunk)
                             
                             # Update progress

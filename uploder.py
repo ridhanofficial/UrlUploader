@@ -111,6 +111,21 @@ async def extract_youtube_info(url):
         logging.error(f"YouTube extraction error: {str(e)}")
         return None
 
+async def send_file(client, chat_id, document, file_name, caption=None, progress=None, progress_args=None):
+    """Send file to chat"""
+    try:
+        return await client.send_document(
+            chat_id=chat_id,
+            document=document,
+            caption=caption,
+            file_name=file_name,
+            progress=progress,
+            progress_args=progress_args
+        )
+    except Exception as e:
+        logging.error(f"Error in send_file: {str(e)}")
+        raise
+
 async def process_youtube(client, message, url):
     try:
         progress_msg = await message.reply_text("🎥 **Processing YouTube Link...**")
@@ -154,4 +169,15 @@ async def process_youtube(client, message, url):
                     )
                 )
                 
-                # Create rows of 2
+                # Create rows of 2 buttons
+                if len(current_row) == 2:
+                    video_buttons.append(current_row)
+                    current_row = []
+
+        # Add any remaining buttons
+        if current_row:
+            video_buttons.append(current_row)
+
+        # ...rest of existing code...
+
+# ...rest of the file remains unchanged...

@@ -860,6 +860,22 @@ async def broadcast_message(client, message: Message):
     except Exception as e:
         await message.reply_text(f"❌ Failed to send broadcast: {str(e)}")
 
+async def start_bot():
+    """Start the bot with flood wait handling"""
+    while True:
+        try:
+            await bot.start()
+            print("Bot started successfully!")
+            break
+        except Exception as e:
+            if isinstance(e, pyrogram.errors.FloodWait):
+                print(f"Flood wait error, sleeping for {e.value} seconds")
+                await asyncio.sleep(e.value)
+            else:
+                print(f"Failed to start bot: {str(e)}")
+                raise e
+
 if __name__ == "__main__":
     user.start()
-    bot.run()
+    asyncio.get_event_loop().run_until_complete(start_bot())
+    bot.idle()

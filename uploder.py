@@ -477,7 +477,7 @@ async def handle_download_or_upload(
                         )
                     else:
                         # Generic document
-                        sent_file = await send_file_with_thumbnail(
+                        sent_file = await send_file(
                             client=client,
                             chat_id=message.chat.id,
                             document=downloaded_file,
@@ -830,24 +830,28 @@ async def download_youtube(
             # Detailed error handling
             error_message = str(yt_error)
             if "Private video" in error_message:
-                error_text = "❌ **Download Failed**: Private video"
-            elif "Unavailable video" in error_message:
-                error_text = "❌ **Download Failed**: Video unavailable"
-            elif "Geoblocked" in error_message:
-                error_text = "❌ **Download Failed**: Video geoblocked"
+                # Try alternative extraction methods
+                ydl_opts['cookiesfrombrowser'] = None
+                ydl_opts['cookiefile'] = None
+                
+                with yt_dlp.YoutubeDL(ydl_opts) as fallback_ydl:
+                    info = fallback_ydl.extract_info(url, download=True)
             else:
-                error_text = f"❌ **YouTube Download Failed**: {error_message}"
+                raise
+        
+        except Exception as general_error:
+            logging.error(f"General YouTube Download Error: {general_error}")
             
-            # Update error message
+            # Final fallback error message
             try:
                 if hasattr(message, 'edit_text'):
-                    await message.edit_text(error_text)
+                    await message.edit_text(f"❌ **Download Failed**: {str(general_error)}")
                 else:
-                    await message.reply_text(error_text)
-            except Exception as msg_error:
-                logging.error(f"Error sending message: {msg_error}")
-            
-            return None
+                    await message.reply_text(f"❌ **Download Failed**: {str(general_error)}")
+            except:
+                pass
+        
+        return None
     
     except Exception as general_error:
         logging.error(f"General YouTube Download Error: {general_error}")
@@ -1984,45 +1988,201 @@ async def safe_edit_progress(message, text):
             logging.error(f"Failed to update progress: {reply_error}")
 
 async def progress_for_pyrogram(current, total, ud_type, message, start):
+    """
+    Advanced progress tracker with detailed bar and ETA
+    
+    :param current: Current progress
+    :param total: Total file size
+    :param message: Message to update
+    :param start_time: Start time of download/upload
+    :param file_name: Name of the file being processed
+    :param upload_type: Type of operation (download/upload)
+    """
     try:
-        # Ensure message is a valid message object
-        if not hasattr(message, 'edit'):
-            logging.error(f"Invalid message object: {type(message)}")
-            return
+        # Ensure upload_type is a string
+        upload_type = str(ud_type).lower()
         
         now = time.time()
         diff = now - start
         
-        if round(diff % 10.00) == 0 or current == total:
+        if current == 0:
+            return
+        
+        # Calculate speed
+        speed = current / diff if diff > 0 else 0
+        
+        # Calculate ETA
+        if speed > 0:
+            time_to_complete = (total - current) / speed
+            eta = datetime.timedelta(seconds=int(time_to_complete))
+        else:
+            eta = datetime.timedelta(seconds=0)
+        
+        # Calculate percentage
+        percentage = current * 100 / total if total > 0 else 0
+        
+        # Create progress bar
+        progress_bar_length = 20
+        filled_length = int(progress_bar_length * current // total)
+        bar = '█' * filled_length + '░' * (progress_bar_length - filled_length)
+        
+        # Format speed
+        if speed > 1024 * 1024:
+            speed_str = f"{speed / (1024 * 1024):.2f} MB/s"
+        elif speed > 1024:
+            speed_str = f"{speed / 1024:.2f} KB/s"
+        else:
+            speed_str = f"{speed:.2f} B/s"
+        
+        # Construct status message
+        status_message = (
+            f"**{upload_type.capitalize()} Progress** 📥\n"
+            f"📁 **File**: `{file_name}`\n"
+            f"🔢 **Progress**: [{bar}] {percentage:.2f}%\n"
+            f"📊 **Size**: {humanbytes(current)} / {humanbytes(total)}\n"
+            f"🚀 **Speed**: {speed_str}\n"
+            f"⏳ **ETA**: {eta}"
+        )
+        
+        # Update message every 5 seconds or at significant progress points
+        if (now - getattr(progress_for_pyrogram, 'last_update', 0) > 5) or (current == total):
             try:
-                percentage = current * 100 / total if total > 0 else 0
-                speed = current / diff if diff > 0 else 0
-                elapsed_time = round(diff) * 1000
-                time_to_completion = round((total - current) / speed) * 1000 if speed > 0 else 0
-                estimated_total_time = elapsed_time + time_to_completion
-
-                elapsed_time = TimeFormatter(milliseconds=elapsed_time)
-                estimated_total_time = TimeFormatter(milliseconds=estimated_total_time)
-
-                progress = "[{0}{1}] \nP: {2}%\n".format(
-                    ''.join(["█" for _ in range(math.floor(percentage / 5))]),
-                    ''.join(["░" for _ in range(20 - math.floor(percentage / 5))]),
-                    round(percentage, 2))
-
-                tmp = progress + "{0} of {1}\nSpeed: {2}/s\nETA: {3}\n".format(
-                    humanbytes(current),
-                    humanbytes(total),
-                    humanbytes(speed),
-                    estimated_total_time if estimated_total_time != '' else "0 s"
-                )
-                
-                # Safely edit message
-                await message.edit(
-                    text=f"{ud_type}\n {tmp}",
-                    parse_mode=ParseMode.MARKDOWN
-                )
+                if hasattr(message, 'edit_text'):
+                    await message.edit_text(status_message)
+                else:
+                    await message.reply_text(status_message)
+                progress_for_pyrogram.last_update = now
+            except FloodWait as e:
+                await asyncio.sleep(e.x)
             except Exception as edit_error:
-                logging.error(f"Error updating progress: {edit_error}")
+                logging.error(f"Progress message update error: {edit_error}")
+    
     except Exception as e:
         logging.error(f"Progress tracking error: {e}")
-        logging.error(f"Error details: {traceback.format_exc()}")
+
+async def send_file(
+    client, 
+    chat_id, 
+    document, 
+    file_name, 
+    caption=None, 
+    progress_callback=None
+):
+    """
+    Send file with detailed progress tracking and status bar
+    
+    :param client: Telegram client
+    :param chat_id: Destination chat ID
+    :param document: Path to the document
+    :param file_name: Name of the file
+    :param caption: Optional caption
+    :param progress_callback: Optional progress tracking function
+    :return: Sent message
+    """
+    try:
+        # Validate input parameters
+        if not document or not os.path.exists(document):
+            raise ValueError(f"Invalid document path: {document}")
+        
+        # Get file size
+        file_size = os.path.getsize(document)
+        
+        # Create progress message
+        progress_message = await client.send_message(
+            chat_id=chat_id, 
+            text="**🔄 Preparing Upload...**"
+        )
+        
+        # Start time for speed calculation
+        start_time = time.time()
+        
+        # Progress tracking function
+        async def upload_progress(current, total):
+            try:
+                now = time.time()
+                diff = now - start_time
+                
+                # Calculate progress
+                percentage = (current / total) * 100 if total > 0 else 0
+                
+                # Calculate speed
+                speed = current / diff if diff > 0 else 0
+                
+                # Calculate ETA
+                time_left = (total - current) / speed if speed > 0 else 0
+                
+                # Create progress bar
+                bar_length = 20
+                filled_length = int(bar_length * current // total)
+                bar = '█' * filled_length + '░' * (bar_length - filled_length)
+                
+                # Format progress message
+                progress_text = (
+                    f"**📤 Uploading**\n"
+                    f"`{bar}` {percentage:.1f}%\n"
+                    f"**Size:** {humanbytes(current)} / {humanbytes(total)}\n"
+                    f"**Speed:** {humanbytes(speed)}/s\n"
+                    f"**ETA:** {TimeFormatter(int(time_left * 1000))}"
+                )
+                
+                # Update progress message
+                await progress_message.edit(progress_text)
+            
+            except Exception as e:
+                logging.error(f"Upload progress error: {e}")
+        
+        try:
+            # Upload the file
+            uploaded_file = await client.send_document(
+                chat_id=chat_id,
+                document=document,
+                file_name=file_name,
+                caption=caption,
+                progress=upload_progress
+            )
+            
+            # Delete progress message
+            try:
+                await progress_message.delete()
+            except Exception as delete_error:
+                logging.warning(f"Could not delete progress message: {delete_error}")
+            
+            # Optional: Delete local file after upload
+            try:
+                os.remove(document)
+                logging.info(f"Deleted local file: {document}")
+            except Exception as cleanup_error:
+                logging.warning(f"File cleanup error: {cleanup_error}")
+            
+            return uploaded_file
+        
+        except Exception as upload_error:
+            # Error handling
+            logging.error(f"Upload error: {upload_error}")
+            
+            # Update progress message with error
+            try:
+                await progress_message.edit(
+                    f"**❌ Upload Failed!**\n\n`{str(upload_error)}`"
+                )
+            except Exception as edit_error:
+                logging.warning(f"Could not edit progress message: {edit_error}")
+                await client.send_message(
+                    chat_id=chat_id, 
+                    text=f"**❌ Upload Failed!**\n\n`{str(upload_error)}`"
+                )
+            
+            raise
+    
+    except Exception as general_error:
+        logging.error(f"General upload error: {general_error}")
+        
+        try:
+            await client.send_message(
+                chat_id=chat_id, 
+                text=f"**❌ Upload Process Failed!**\n\n`{str(general_error)}`"
+            )
+        except Exception as notification_error:
+            logging.error(f"Could not send error notification: {notification_error}")
+        
+        raise

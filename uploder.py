@@ -5,7 +5,6 @@ import time
 import logging
 import asyncio
 import aiohttp
-from pyleaves import Leaves
 from pyrogram.enums import ParseMode
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message
@@ -163,7 +162,7 @@ async def handle_message(client, message: Message):
             downloaded_file = await async_download_file(
                 url,
                 new_name_with_ext,
-                progress=Leaves.progress_for_pyrogram,
+                progress=progress_for_pyrogram,
                 progress_args=progressArgs("📥 Downloading Progress", editable_text, start_time)
             )
             
@@ -172,7 +171,7 @@ async def handle_message(client, message: Message):
                 document=downloaded_file, 
                 file_name=new_name_with_ext,
                 caption="📤 Upload Complete!",
-                progress=Leaves.progress_for_pyrogram,
+                progress=progress_for_pyrogram,
                 progress_args=progressArgs("📤 Uploading Progress", editable_text, upload_start_time)
             )
 
@@ -246,6 +245,9 @@ async def progress_text(current, total, start_time):
     )
     
     return text
+
+def progress_for_pyrogram(current, total):
+    return progress_text(current, total, time.time())
 
 @bot.on_message(filters.photo & filters.incoming & filters.private)
 async def save_photo(client, message):
@@ -333,7 +335,7 @@ async def on_file_decision(client, callback_query):
             downloaded_file = await async_download_file(
                 url,
                 filename,
-                progress=Leaves.progress_for_pyrogram,
+                progress=progress_for_pyrogram,
                 progress_args=progressArgs("📥 Downloading Progress", editable_text, start_time)
             )
             
@@ -342,7 +344,7 @@ async def on_file_decision(client, callback_query):
                 document=downloaded_file, 
                 file_name=filename,
                 caption="📤 Upload Complete!",
-                progress=Leaves.progress_for_pyrogram,
+                progress=progress_for_pyrogram,
                 progress_args=progressArgs("📤 Uploading Progress", editable_text, upload_start_time)
             )
 

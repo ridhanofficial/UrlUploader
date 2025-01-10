@@ -8,6 +8,7 @@ import aiohttp
 from pyrogram.enums import ParseMode
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message
+from pyrogram.errors import FloodWait
 import math
 import yt_dlp
 
@@ -145,36 +146,87 @@ async def get_concurrent_downloads(user_id: int) -> int:
     return 5
 
 async def save_thumb(user_id: int, thumb_path: str):
-    """Save user's thumbnail"""
-    os.makedirs(os.path.join(THUMB_LOCATION, str(user_id)), exist_ok=True)
-    thumb_file = os.path.join(THUMB_LOCATION, str(user_id), "thumbnail.jpg")
+    """
+    Save thumbnail path for a specific user
+    This function should be implemented to store user-specific thumbnails
+    """
     try:
-        # Copy and convert thumbnail
-        from PIL import Image
-        image = Image.open(thumb_path)
-        image.convert("RGB").save(thumb_file, "JPEG")
-        return thumb_file
+        # Create a directory for user thumbnails if it doesn't exist
+        os.makedirs(THUMB_LOCATION, exist_ok=True)
+        
+        # Store the thumbnail path (you might want to use a database in a real-world scenario)
+        user_thumb_file = os.path.join(THUMB_LOCATION, f"{user_id}_thumb.txt")
+        
+        with open(user_thumb_file, 'w') as f:
+            f.write(thumb_path)
+        
+        return True
     except Exception as e:
-        logging.error(f"Error saving thumbnail: {str(e)}")
-        return None
+        logging.error(f"Error saving thumb for user {user_id}: {str(e)}")
+        return False
 
 def get_thumb(user_id: int):
-    """Get user's saved thumbnail"""
-    thumb_file = os.path.join(THUMB_LOCATION, str(user_id), "thumbnail.jpg")
-    if os.path.exists(thumb_file):
-        return thumb_file
-    return None
-
-def delete_thumb(user_id: int):
-    """Delete user's saved thumbnail"""
-    thumb_file = os.path.join(THUMB_LOCATION, str(user_id), "thumbnail.jpg")
+    """
+    Retrieve thumbnail path for a specific user
+    Returns None if no thumbnail is found
+    """
     try:
-        if os.path.exists(thumb_file):
-            os.remove(thumb_file)
-            return True
+        user_thumb_file = os.path.join(THUMB_LOCATION, f"{user_id}_thumb.txt")
+        
+        if os.path.exists(user_thumb_file):
+            with open(user_thumb_file, 'r') as f:
+                thumb_path = f.read().strip()
+            
+            # Verify the thumbnail file exists
+            if os.path.exists(thumb_path):
+                return thumb_path
+        
+        return None
     except Exception as e:
-        logging.error(f"Error deleting thumbnail: {str(e)}")
-    return False
+        logging.error(f"Error retrieving thumb for user {user_id}: {str(e)}")
+        return None
+
+async def save_photo(client, message):
+    """Save photo as thumbnail"""
+    # Ensure the thumb directory exists
+    os.makedirs(THUMB_LOCATION, exist_ok=True)
+    
+    try:
+        # Check if the message is a reply to a photo
+        if not message.reply_to_message or not message.reply_to_message.photo:
+            await message.reply_text("❌ Please reply to a photo to set it as thumbnail.")
+            return
+        
+        # Get the photo from the replied message
+        photo = message.reply_to_message.photo
+        
+        # Get the largest photo size
+        largest_photo = photo[-1]
+        
+        # Generate a unique filename for the thumbnail
+        thumb_path = os.path.join(
+            THUMB_LOCATION, 
+            f"{message.from_user.id}_thumb.jpg"
+        )
+        
+        # Download the photo
+        await client.download_media(
+            message.reply_to_message, 
+            file_name=thumb_path
+        )
+        
+        # Save thumbnail for the user
+        await save_thumb(message.from_user.id, thumb_path)
+        
+        # Send confirmation
+        await message.reply_text(
+            "✅ **Thumbnail saved successfully!**\n"
+            "This thumbnail will be used for your future uploads."
+        )
+    
+    except Exception as e:
+        logging.error(f"Error saving thumbnail: {str(e)}")
+        await message.reply_text(f"❌ Error saving thumbnail: {str(e)}")
 
 async def get_file_size(url):
     """Get file size from URL without downloading"""
@@ -608,126 +660,138 @@ async def callback_handler(client, callback_query):
         except Exception:
             pass
 
-async def save_photo(client, message):
-    """Save photo as thumbnail"""
+async def broadcast_handler(client, message: Message):
+    """
+    Handle broadcast messages from the bot owner
+    Only the owner can use this command
+    """
+    # Check if the user is the owner
+    if message.from_user.id != OWNER_ID:
+        await message.reply_text("❌ You are not authorized to use this command.")
+        return
+
+    # Check if the message is a reply to another message
+    if not message.reply_to_message:
+        await message.reply_text("❌ Please reply to a message you want to broadcast.")
+        return
+
+    # Get the message to broadcast
+    broadcast_msg = message.reply_to_message
+
+    # Send a progress message
+    status_msg = await message.reply_text("🔄 Starting broadcast...")
+
+    # Track broadcast statistics
+    total_users = 0
+    successful_broadcasts = 0
+    failed_broadcasts = 0
+    blocked_users = 0
+
+    # Get all users from the database (assuming you have a method to retrieve users)
     try:
-        # Ensure the reply is to a photo
-        if not message.reply_to_message or not message.reply_to_message.photo:
-            await message.reply_text("❌ Reply to a photo to set it as thumbnail.")
-            return
-
-        # Get the photo file
-        photo = message.reply_to_message.photo[-1]
-        download_path = os.path.join(THUMB_LOCATION, f"{message.chat.id}_temp.jpg")
-        
-        # Download the photo
-        await client.download_media(
-            message=photo,
-            file_name=download_path
-        )
-        
-        # Save as thumbnail
-        thumb_path = await save_thumb(message.chat.id, download_path)
-        
-        if thumb_path:
-            await message.reply_text("✅ **Custom thumbnail saved successfully!**")
-        else:
-            await message.reply_text("❌ **Failed to save thumbnail!**")
-            
-        # Cleanup temp file
-        try:
-            os.remove(download_path)
-        except:
-            pass
-            
+        users = await get_all_users()  # You'll need to implement this function
     except Exception as e:
-        await message.reply_text(f"❌ **Error saving thumbnail:**\n\n`{str(e)}`")
+        await status_msg.edit_text(f"❌ Error retrieving users: {str(e)}")
+        return
 
-@bot.on_message(filters.command(["thumb"]))
-async def handle_thumb_command(client, message):
-    """Handle thumbnail command"""
-    if message.reply_to_message and message.reply_to_message.photo:
-        # Save thumbnail
-        await save_photo(client, message)
-    else:
-        # Show current thumbnail
-        thumb = get_thumb(message.chat.id)
-        if thumb:
-            await message.reply_photo(
-                photo=thumb,
-                caption="🖼️ **Your current thumbnail**\n\n"
-                "• Reply to a photo with /thumb to change it\n"
-                "• Use /delthumb to remove it"
-            )
-        else:
-            await message.reply_text(
-                "❌ **No thumbnail set!**\n\n"
-                "• Reply to a photo with /thumb to set it"
-            )
+    # Broadcast the message
+    for user_id in users:
+        try:
+            # Try to send the message
+            if broadcast_msg.text:
+                await client.send_message(
+                    chat_id=user_id, 
+                    text=broadcast_msg.text
+                )
+            elif broadcast_msg.caption:
+                # If it's a media message with a caption
+                await client.copy_message(
+                    chat_id=user_id,
+                    from_chat_id=broadcast_msg.chat.id,
+                    message_id=broadcast_msg.id
+                )
+            
+            successful_broadcasts += 1
+        except FloodWait as e:
+            # Handle Telegram's flood wait
+            await asyncio.sleep(e.x)
+            try:
+                if broadcast_msg.text:
+                    await client.send_message(
+                        chat_id=user_id, 
+                        text=broadcast_msg.text
+                    )
+                elif broadcast_msg.caption:
+                    await client.copy_message(
+                        chat_id=user_id,
+                        from_chat_id=broadcast_msg.chat.id,
+                        message_id=broadcast_msg.id
+                    )
+                successful_broadcasts += 1
+            except Exception:
+                failed_broadcasts += 1
+        except Exception as e:
+            # Check for specific error types
+            if "blocked" in str(e).lower():
+                blocked_users += 1
+            failed_broadcasts += 1
 
-@bot.on_message(filters.command(["delthumb"]))
-async def handle_delthumb_command(client, message):
-    if delete_thumb(message.chat.id):
-        await message.reply_text("🗑️ Custom thumbnail deleted successfully!")
-    else:
-        await message.reply_text("❌ No custom thumbnail found to delete.")
+        total_users += 1
+
+    # Update status message with broadcast results
+    await status_msg.edit_text(
+        f"📊 **Broadcast Complete**\n\n"
+        f"Total Users: `{total_users}`\n"
+        f"Successful: `{successful_broadcasts}`\n"
+        f"Failed: `{failed_broadcasts}`\n"
+        f"Blocked Users: `{blocked_users}`"
+    )
+
+# Placeholder function for getting all users
+async def get_all_users():
+    """
+    Retrieve all user IDs from the database
+    This is a placeholder and should be replaced with actual database logic
+    """
+    # In a real implementation, this would query your database
+    # For now, we'll return an empty list to prevent errors
+    return []
 
 @bot.on_message(filters.command(["broadcast"]) & filters.user(OWNER_ID))
-async def broadcast_message(client, message):
-    if not message.reply_to_message:
-        await message.reply_text("❌ Please reply to a message to broadcast it.")
-        return
+async def broadcast_message(client, message: Message):
+    """
+    Command handler for broadcast
+    Checks user permissions and calls broadcast_handler
+    """
     await broadcast_handler(client, message)
 
 @bot.on_message(filters.private & filters.text)
-async def handle_message(client, message):
-    text = message.text
-    chat_id = message.chat.id
-    
-    if text.startswith("/"):
-        return  # Let command handlers handle commands
-        
-    # Check if this is a rename request
-    if chat_id in pending_renames:
-        if text.lower() == "/cancel":
-            pending_renames.pop(chat_id)
-            await message.reply_text("❌ Process Cancelled")
-            return
-            
-        rename_info = pending_renames.pop(chat_id)
-        if rename_info.get("type") == "youtube":
-            # Handle YouTube rename
-            await download_youtube(client, message, rename_info["url"], text)
-        else:
-            # Handle normal file rename
-            await handle_download(client, message, rename_info["url"], text)
+async def handle_text_message(client, message: Message):
+    """
+    Handle incoming text messages
+    Only respond to specific types of messages (URLs, commands)
+    """
+    # Ignore plain text messages
+    if not any([
+        message.text.startswith(('http://', 'https://', 'ftp://')),  # Direct URLs
+        'youtu' in message.text.lower(),  # YouTube links
+        message.text.startswith('/')  # Commands
+    ]):
+        # Optionally, you can delete plain text messages
+        try:
+            await client.delete_messages(
+                chat_id=message.chat.id, 
+                message_ids=[message.id]
+            )
+        except Exception:
+            pass
         return
-        
-    # Check if URL is YouTube
-    if re.match(YOUTUBE_REGEX, text):
-        await process_youtube(client, message, text)
-    elif re.match(URL_REGEX, text):
-        # Handle normal URL download
-        file_id = str(uuid.uuid4())
-        pending_downloads[file_id] = text
-        
-        keyboard = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("⚡️ Quick Download", callback_data=f"default|{file_id}"),
-                InlineKeyboardButton("✏️ Custom Name", callback_data=f"rename|{file_id}")
-            ],
-            [
-                InlineKeyboardButton("❌ Cancel", callback_data=f"cancel|{file_id}")
-            ]
-        ])
-        
-        await message.reply_text(
-            "🔗 **URL Detected!**\n\n"
-            "Choose an option:",
-            reply_markup=keyboard
-        )
-    else:
-        await message.reply_text("❌ **Please send me a valid direct download link or YouTube URL!**")
+
+    # Handle URLs and YouTube links
+    if message.text.startswith(('http://', 'https://', 'ftp://')) or 'youtu' in message.text.lower():
+        await download_url(client, message)
+    
+    # Commands are already handled by their specific handlers
 
 async def start():
     """Start both bot and user client"""
@@ -759,3 +823,58 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+@bot.on_message(filters.private & filters.text)
+async def handle_message(client, message):
+    text = message.text
+    chat_id = message.chat.id
+    
+    if text.startswith("/"):
+        return  # Let command handlers handle commands
+        
+    # Check if this is a rename request
+    if chat_id in pending_renames:
+        if text.lower() == "/cancel":
+            pending_renames.pop(chat_id)
+            await message.reply_text("❌ Process Cancelled")
+            return
+            
+        rename_info = pending_renames.pop(chat_id)
+        if rename_info.get("type") == "youtube":
+            await download_youtube(client, message, rename_info["url"], text)
+        else:
+            await handle_download(client, message, rename_info["url"], text)
+        return
+        
+    # Check if URL is YouTube
+    if re.match(YOUTUBE_REGEX, text):
+        await process_youtube(client, message, text)
+    elif re.match(URL_REGEX, text):
+        # Handle normal URL download
+        file_id = str(uuid.uuid4())
+        pending_downloads[file_id] = text
+        
+        # Get file size and name
+        file_size = await get_file_size(text)
+        original_filename = await get_filename(text) or "File"
+        size_text = humanbytes(file_size) if file_size else "Unknown"
+        
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("⚡️ Quick Download", callback_data=f"default|{file_id}"),
+                InlineKeyboardButton("✏️ Custom Name", callback_data=f"rename|{file_id}")
+            ],
+            [
+                InlineKeyboardButton("❌ Cancel", callback_data=f"cancel|{file_id}")
+            ]
+        ])
+        
+        await message.reply_text(
+            f"**🔗 URL Detected!**\n\n"
+            f"📦 **File Size:** {size_text}\n"
+            f"📄 **Original Name:** `{original_filename}`\n"
+            f"🎯 **Choose an option:**",
+            reply_markup=keyboard
+        )
+    else:
+        await message.reply_text("❌ **Please send me a valid direct download link or YouTube URL!**")

@@ -32,7 +32,11 @@ os.makedirs(THUMB_LOCATION, exist_ok=True)
 
 # Define text constants
 START_TEXT = """
-👋 Hi {}, I'm a Telegram File Uploader Bot!
+👋 Hi {first_name}, I'm a Telegram File Uploader Bot!
+
+Status: {status}
+Storage: {storage}
+Features: {features}
 
 I can help you:
 • Upload files from direct links
@@ -425,11 +429,18 @@ async def check_user_premium(user_id: int) -> bool:
     return False
 
 async def get_user_info(user_id: int):
-    """Get user's features for free tier"""
-    return "⭐ Free User", "Up to 2GB per file", """
-• Upload files up to 2GB
-• Basic thumbnails
-• Standard support"""
+    """
+    Retrieve user information
+    
+    :param user_id: Telegram user ID
+    :return: Tuple of (status, storage, features)
+    """
+    # Default free tier settings
+    status = "🟢 Free Tier"
+    storage = "500 MB / 2 GB"
+    features = "Basic Upload & Download"
+    
+    return status, storage, features
 
 # Initialize bot with proper settings
 bot = Client(
@@ -541,6 +552,7 @@ async def start_command(client, message: Message):
     await client.send_message(
         chat_id=message.chat.id,
         text=START_TEXT.format(
+            first_name=message.from_user.first_name,
             status=status,
             storage=storage,
             features=features
@@ -582,6 +594,7 @@ async def callback_handler(client, callback_query):
             
             await message.edit_text(
                 START_TEXT.format(
+                    first_name=callback_query.from_user.first_name,
                     status=status,
                     storage=storage,
                     features=features

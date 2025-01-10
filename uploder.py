@@ -99,45 +99,84 @@ async def process_youtube(client, message, url):
     try:
         progress_msg = await message.reply_text("🎥 **Processing YouTube Link...**")
         
-        # Extract info
-        info = await extract_youtube_info(url)
-        if not info:
-            await progress_msg.edit_text("❌ **Failed to process YouTube video**\n\nMake sure the video exists.")
-            return
+        # Extract info with yt-dlp to get detailed format information
+        ydl_opts = {
+            'quiet': True,
+            'no_warnings': True,
+            'extract_flat': True,
+        }
         
-        # Check file size (2GB limit)
-        if info['filesize'] > 2 * 1024 * 1024 * 1024:  # 2GB in bytes
-            await progress_msg.edit_text(
-                f"❌ **Video size ({humanbytes(info['filesize'])}) is too large!**\n\n"
-                "Maximum allowed size is 2GB"
-            )
-            return
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info_dict = ydl.extract_info(url, download=False)
         
-        # Show download options
-        keyboard = InlineKeyboardMarkup([
+        # Get full video information
+        full_info = yt_dlp.YoutubeDL().extract_info(url, download=False)
+        
+        # Prepare video qualities keyboard
+        video_buttons = []
+        current_row = []
+        
+        # Filter and sort video formats
+        video_formats = [
+            f for f in full_info.get('formats', []) 
+            if f.get('height') and f.get('ext') == 'mp4'
+        ]
+        
+        # Sort formats by resolution
+        video_formats.sort(key=lambda x: x.get('height', 0), reverse=True)
+        
+        # Create buttons for unique resolutions
+        seen_resolutions = set()
+        for fmt in video_formats:
+            resolution = f"{fmt.get('height', 0)}p"
+            if resolution not in seen_resolutions:
+                seen_resolutions.add(resolution)
+                current_row.append(
+                    InlineKeyboardButton(
+                        f"🎥 {resolution}", 
+                        callback_data=f"ytdl_video_quality|{url}|{fmt.get('format_id', '')}"
+                    )
+                )
+                
+                # Create rows of 2 buttons
+                if len(current_row) == 2:
+                    video_buttons.append(current_row)
+                    current_row = []
+        
+        # Add any remaining buttons
+        if current_row:
+            video_buttons.append(current_row)
+        
+        # Add additional rows
+        video_buttons.extend([
             [
-                InlineKeyboardButton("🎥 Video", callback_data=f"ytdl_video|{url}"),
-                InlineKeyboardButton("🎵 Audio", callback_data=f"ytdl_audio|{url}")
+                InlineKeyboardButton("🎵 Audio", callback_data=f"ytdl_audio|{url}"),
+                InlineKeyboardButton("✏️ Custom Name", callback_data=f"ytdl|{url}|rename")
             ],
             [
-                InlineKeyboardButton("✏️ Custom Name", callback_data=f"ytdl|{url}|rename"),
                 InlineKeyboardButton("❌ Cancel", callback_data="cancel")
             ]
         ])
         
-        # Send message with video details
+        keyboard = InlineKeyboardMarkup(video_buttons)
+        
+        # Prepare video details
+        title = full_info.get('title', 'Unknown Title')
+        duration = full_info.get('duration', 0)
+        uploader = full_info.get('uploader', 'Unknown Uploader')
+        
         await progress_msg.edit_text(
             f"**🎥 YouTube Video Detected!**\n\n"
-            f"📹 **Title:** `{info['title']}`\n"
-            f"⏱️ **Duration:** {info['duration']} seconds\n"
-            f"📦 **Size:** {humanbytes(info['filesize'])}\n"
-            f"🎯 **Choose an option:**",
+            f"📹 **Title:** `{title}`\n"
+            f"👤 **Uploader:** `{uploader}`\n"
+            f"⏱️ **Duration:** {duration} seconds\n"
+            f"🎯 **Choose Download Quality:**",
             reply_markup=keyboard
         )
     
     except Exception as e:
         logging.error(f"YouTube processing error: {str(e)}")
-        await message.reply_text("❌ **Failed to process YouTube video**")
+        await progress_msg.edit_text(f"❌ **Failed to process YouTube video:** {str(e)}")
 
 async def get_max_file_size(user_id: int) -> int:
     return MAX_FILE_SIZE
@@ -566,14 +605,27 @@ async def callback_handler(client, callback_query):
                     await message.edit_text("❌ Download link expired. Please try again.")
                     return
                 
-                await handle_download(client, message, url)
-                del pending_downloads[file_id]
+                # Create a new progress message
+                progress_msg = await message.reply_text("📥 **Downloading file...**")
+                
+                try:
+                    # Attempt to download the file
+                    await handle_download(client, progress_msg, url)
+                    del pending_downloads[file_id]
+                except Exception as e:
+                    await progress_msg.edit_text(f"❌ **Download failed:** {str(e)}")
+                    logging.error(f"Direct download error: {str(e)}")
             
             elif data.startswith("rename|"):
                 # Custom name
+                url = pending_downloads.get(file_id)
+                if not url:
+                    await message.edit_text("❌ Download link expired. Please try again.")
+                    return
+                
                 pending_renames[message.chat.id] = {
                     "type": "direct",
-                    "url": pending_downloads.get(file_id)
+                    "url": url
                 }
                 await message.edit_text(
                     "📝 **Send me a custom file name**\n\n"
@@ -590,10 +642,7 @@ async def callback_handler(client, callback_query):
                 url = parts[1]
                 download_type = parts[2]
                 
-                if download_type == "default":
-                    # Quick download (video)
-                    await download_youtube(client, message, url, "video")
-                elif download_type == "rename":
+                if download_type == "rename":
                     # Custom name for YouTube download
                     pending_renames[callback_query.from_user.id] = {
                         "type": "youtube",
@@ -604,6 +653,76 @@ async def callback_handler(client, callback_query):
                         "• Send the name you want (without extension)\n"
                         "• Or send /cancel to abort"
                     )
+            return
+        
+        # YouTube video download with quality selection
+        if data.startswith("ytdl_video_quality|"):
+            url, format_id = data.split("|")[1:]
+            
+            # Delete previous messages to clean up
+            try:
+                await message.reply_to_message.delete()
+            except:
+                pass
+            
+            try:
+                await message.delete()
+            except:
+                pass
+            
+            # Trigger video download
+            ydl_opts = {
+                "format": format_id,
+                "outtmpl": "%(title)s - %(extractor)s-%(id)s.%(ext)s",
+                "writethumbnail": True,
+            }
+            
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info_dict = ydl.extract_info(url, download=False)
+                
+                # Create a new progress message
+                progress_msg = await callback_query.message.reply_text("🎥 **Downloading Video...**")
+                
+                try:
+                    await download_youtube(client, progress_msg, url, "video")
+                except Exception as e:
+                    await progress_msg.edit_text(f"❌ **Download failed:** {str(e)}")
+            
+            return
+        
+        # YouTube audio download
+        if data.startswith("ytdl_audio|"):
+            url = data.split("|")[1]
+            
+            # Delete previous messages to clean up
+            try:
+                await message.reply_to_message.delete()
+            except:
+                pass
+            
+            try:
+                await message.delete()
+            except:
+                pass
+            
+            # Trigger audio download
+            ydl_opts = {
+                "format": "bestaudio",
+                "outtmpl": "%(title)s - %(extractor)s-%(id)s.%(ext)s",
+                "writethumbnail": True,
+            }
+            
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info_dict = ydl.extract_info(url, download=False)
+                
+                # Create a new progress message
+                progress_msg = await callback_query.message.reply_text("🎵 **Downloading Audio...**")
+                
+                try:
+                    await download_youtube(client, progress_msg, url, "audio")
+                except Exception as e:
+                    await progress_msg.edit_text(f"❌ **Download failed:** {str(e)}")
+            
             return
         
         # Cancel button handler

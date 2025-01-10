@@ -25,8 +25,7 @@ from config import (
     SESSION_STRING,
     MAX_FILE_SIZE,
     DOWNLOAD_LOCATION,
-    OWNER_ID,
-    FORCE_SUB_CHANNEL
+    OWNER_ID
 )
 
 # Initialize bot with proper settings
@@ -96,33 +95,6 @@ def delete_thumb(user_id: int):
     except Exception as e:
         logging.error(f"Error deleting thumbnail: {str(e)}")
     return False
-
-async def force_sub(client, message: Message):
-    """Check if user has joined the channel"""
-    try:
-        user_id = message.from_user.id
-        if FORCE_SUB_CHANNEL.startswith("@"):
-            channel = FORCE_SUB_CHANNEL
-        else:
-            channel = "@" + FORCE_SUB_CHANNEL
-            
-        try:
-            await client.get_chat_member(channel, user_id)
-            return True
-        except Exception:
-            buttons = [[
-                InlineKeyboardButton("🔔 Join Channel", url=f"https://t.me/{channel.replace('@', '')}")
-            ]]
-            await message.reply_text(
-                f"**❗️ You must join our channel to use this bot!**\n\n"
-                f"Please join @{channel.replace('@', '')} and try again.",
-                reply_markup=InlineKeyboardMarkup(buttons),
-                quote=True
-            )
-            return False
-    except Exception as e:
-        logging.error(f"Force sub error: {str(e)}")
-        return True
 
 async def get_file_size(url):
     """Get file size from URL without downloading"""
@@ -396,7 +368,16 @@ def TimeFormatter(milliseconds: int) -> str:
 # Message handlers
 @bot.on_message(filters.command(["start"]))
 async def start_command(client, message):
-    await message.reply_text(START_TEXT)
+    keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("✨ Help", callback_data="help"),
+            InlineKeyboardButton("📊 About", callback_data="about")
+        ],
+        [
+            InlineKeyboardButton("💫 Support", url="https://t.me/your_support")
+        ]
+    ])
+    await message.reply_text(START_TEXT, reply_markup=keyboard)
 
 @bot.on_message(filters.command(["help"]))
 async def help_command(client, message):

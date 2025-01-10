@@ -1,0 +1,30 @@
+apiVersion: koyeb/v1
+kind: Service
+metadata:
+  name: telegram-url-uploader-bot
+spec:
+  type: web
+  env:
+    - key: API_ID
+      value: $API_ID
+    - key: API_HASH
+      value: $API_HASH
+    - key: BOT_TOKEN
+      value: $BOT_TOKEN
+    - key: OWNER_ID
+      value: $OWNER_ID
+  ports:
+    - port: 8080
+      protocol: TCP
+  routes:
+    - path: /
+  deploy:
+    maxPendingDeployments: 1
+    maxReplicas: 1
+    minReplicas: 1
+    strategy: rolling
+  build:
+    context: .
+    dockerfile: Dockerfile
+  runtime:
+    type: docker

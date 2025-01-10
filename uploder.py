@@ -53,6 +53,7 @@ THUMB_LOCATION = "./THUMBNAILS"
 
 # Constants
 FORCE_SUB_CHANNEL = "@RSforeverBots"
+MAX_FILE_SIZE = 2000 * 1024 * 1024  # 2000 MiB in bytes
 
 async def get_max_file_size(user_id: int) -> int:
     return MAX_FILE_SIZE
@@ -118,6 +119,70 @@ async def force_sub(client, message: Message):
     except Exception as e:
         logging.error(f"Force sub error: {str(e)}")
         return True
+
+async def get_file_size(url):
+    """Get file size from URL without downloading"""
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.head(url, allow_redirects=True) as response:
+                if response.status == 200:
+                    return int(response.headers.get('content-length', 0))
+    except Exception:
+        pass
+    return 0
+
+async def async_download_file(url, filename, progress=None, progress_args=None):
+    """Download file using aiohttp"""
+    try:
+        # Check file size before downloading
+        file_size = await get_file_size(url)
+        if file_size > MAX_FILE_SIZE:
+            raise Exception(f"File size ({humanbytes(file_size)}) is too large. Maximum allowed size is {humanbytes(MAX_FILE_SIZE)}")
+        elif file_size == 0:
+            # If we couldn't get the file size, we'll try downloading anyway
+            logging.warning("Couldn't get file size before download")
+            
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as response:
+                if response.status != 200:
+                    raise Exception(f"Failed to download: HTTP {response.status}")
+                
+                file_size = int(response.headers.get('content-length', 0))
+                if file_size > MAX_FILE_SIZE:
+                    raise Exception(f"File size ({humanbytes(file_size)}) is too large. Maximum allowed size is {humanbytes(MAX_FILE_SIZE)}")
+                
+                downloaded = 0
+                start_time = time.time()
+                
+                with open(filename, 'wb') as f:
+                    async for chunk in response.content.iter_chunked(1024):
+                        if chunk:
+                            f.write(chunk)
+                            downloaded += len(chunk)
+                            if progress:
+                                try:
+                                    await progress(
+                                        downloaded,
+                                        file_size,
+                                        "📥 Downloading",
+                                        progress_args[0],
+                                        start_time
+                                    )
+                                except Exception:
+                                    pass
+                
+                # Send completion message
+                if progress and progress_args:
+                    try:
+                        await progress_args[0].edit("**✅ Download Complete! Starting Upload...**")
+                    except Exception:
+                        pass
+                
+                return filename
+    except Exception as e:
+        if os.path.exists(filename):
+            os.remove(filename)
+        raise e
 
 START_TEXT = """
 ✨ **Welcome to URL Uploader Bot** ✨
@@ -245,49 +310,6 @@ def TimeFormatter(milliseconds: int) -> str:
     return tmp[:-2]
 
 # Update the download handlers to handle completion properly
-async def async_download_file(url, filename, progress=None, progress_args=None):
-    """Download file using aiohttp"""
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url) as response:
-                if response.status != 200:
-                    raise Exception(f"Failed to download: HTTP {response.status}")
-                
-                file_size = int(response.headers.get('content-length', 0))
-                downloaded = 0
-                start_time = time.time()
-                
-                with open(filename, 'wb') as f:
-                    async for chunk in response.content.iter_chunked(1024):
-                        if chunk:
-                            f.write(chunk)
-                            downloaded += len(chunk)
-                            if progress:
-                                try:
-                                    await progress(
-                                        downloaded,
-                                        file_size,
-                                        "📥 Downloading",
-                                        progress_args[0],
-                                        start_time
-                                    )
-                                except Exception:
-                                    pass
-                
-                # Send completion message
-                if progress and progress_args:
-                    try:
-                        await progress_args[0].edit("**✅ Download Complete! Starting Upload...**")
-                    except Exception:
-                        pass
-                
-                return filename
-    except Exception as e:
-        if os.path.exists(filename):
-            os.remove(filename)
-        raise e
-
-# Update send_file_with_thumbnail function
 async def send_file_with_thumbnail(client, chat_id, document, file_name, caption, progress, progress_args):
     """Send file with user's thumbnail if available"""
     thumb = get_thumb(chat_id)
@@ -372,8 +394,21 @@ async def handle_message(client, message: Message):
         # Send initial progress message
         progress_msg = await client.send_message(
             chat_id=chat_id,
-            text="**🔄 Processing URL...**"
+            text="**🔄 Checking file size...**"
         )
+        
+        # Check file size first
+        file_size = await get_file_size(url)
+        if file_size > MAX_FILE_SIZE:
+            await progress_msg.edit(
+                f"❌ **File size ({humanbytes(file_size)}) is too large!**\n\n"
+                f"Maximum allowed size is {humanbytes(MAX_FILE_SIZE)}"
+            )
+            return
+        elif file_size == 0:
+            await progress_msg.edit("⚠️ **Couldn't determine file size, attempting download...**")
+        else:
+            await progress_msg.edit(f"**🔄 Starting download...**\n\nFile size: {humanbytes(file_size)}")
         
         # Start download
         filename = await get_filename(url)
@@ -828,4 +863,3 @@ async def broadcast_message(client, message: Message):
 if __name__ == "__main__":
     user.start()
     bot.run()
-

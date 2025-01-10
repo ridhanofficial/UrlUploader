@@ -561,7 +561,7 @@ async def help_command(client, message: Message):
     # Create keyboard for help
     keyboard = InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("🏠 Back to Start", callback_data="s")
+            InlineKeyboardButton("🏠 Back to Start", callback_data="start")
         ]
     ])
     
@@ -590,7 +590,7 @@ async def about_command(client, message: Message):
     # Create keyboard for about
     keyboard = InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("🏠 Back to Start", callback_data="s")
+            InlineKeyboardButton("🏠 Back to Start", callback_data="start")
         ]
     ])
     
@@ -620,11 +620,11 @@ async def start_command(client, message: Message):
     
     keyboard = InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("⚙️ Settings", callback_data="set"),
-            InlineKeyboardButton("❓ Help", callback_data="h")
+            InlineKeyboardButton("⚙️ Settings", callback_data="settings"),
+            InlineKeyboardButton("❓ Help", callback_data="help")
         ],
         [
-            InlineKeyboardButton("🤖 About", callback_data="a")
+            InlineKeyboardButton("🤖 About", callback_data="about")
         ],
         [
             InlineKeyboardButton("💫 Support", url="https://t.me/your_support")
@@ -648,35 +648,34 @@ async def start_command(client, message: Message):
 async def callback_handler(client, callback_query):
     """Handle all inline button callbacks"""
     try:
+        # Log the callback data for debugging
+        logging.info(f"Received callback data: {callback_query.data}")
+        
         data = callback_query.data
         message = callback_query.message
         chat_id = message.chat.id
         
-        # Validate callback data length
-        if len(data) > 64:  # Telegram has a limit on callback data length
-            await callback_query.answer("❌ Button data is too long.", show_alert=True)
-            return
-        
-        # First answer the callback query to stop loading animation
+        # Always answer the callback query to prevent hanging
         await callback_query.answer(
             "Processing your request...",
             show_alert=False
         )
         
-        # Simplified callback data handling
-        if data == "s":  # Start
+        # Comprehensive callback handling
+        if data == "start":
+            # Start menu
             status, storage, features = await get_user_info(callback_query.from_user.id)
             
             keyboard = InlineKeyboardMarkup([
                 [
-                    InlineKeyboardButton("⚙️ Settings", callback_data="set"),
-                    InlineKeyboardButton("❓ Help", callback_data="h")
+                    InlineKeyboardButton("⚙️ Settings", callback_data="settings"),
+                    InlineKeyboardButton("❓ Help", callback_data="help")
                 ],
                 [
-                    InlineKeyboardButton("🤖 About", callback_data="a")
+                    InlineKeyboardButton("🤖 About", callback_data="about")
                 ],
                 [
-                    InlineKeyboardButton("💫 Support", url="https://t.me/your_support")
+                    InlineKeyboardButton("💫 Support", url="https://t.me/your_support_group")
                 ]
             ])
             
@@ -690,12 +689,11 @@ async def callback_handler(client, callback_query):
                 reply_markup=keyboard,
                 disable_web_page_preview=True
             )
-            return
         
-        elif data == "h":  # Help
+        elif data == "help":
             keyboard = InlineKeyboardMarkup([
                 [
-                    InlineKeyboardButton("🏠 Back to Start", callback_data="s")
+                    InlineKeyboardButton("🏠 Back to Start", callback_data="start")
                 ]
             ])
             
@@ -704,12 +702,11 @@ async def callback_handler(client, callback_query):
                 reply_markup=keyboard,
                 disable_web_page_preview=True
             )
-            return
         
-        elif data == "a":  # About
+        elif data == "about":
             keyboard = InlineKeyboardMarkup([
                 [
-                    InlineKeyboardButton("🏠 Back to Start", callback_data="s")
+                    InlineKeyboardButton("🏠 Back to Start", callback_data="start")
                 ]
             ])
             
@@ -718,55 +715,61 @@ async def callback_handler(client, callback_query):
                 reply_markup=keyboard,
                 disable_web_page_preview=True
             )
-            return
         
-        elif data == "set":  # Settings
-            # Add settings logic here if needed
+        elif data == "settings":
+            keyboard = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("🏠 Back to Start", callback_data="start")
+                ]
+            ])
+            
             await message.edit_text(
                 "**⚙️ Settings**\n\nNo settings configured yet.",
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🏠 Back to Start", callback_data="s")]
-                ])
+                reply_markup=keyboard
             )
-            return
         
-        # Existing callback handlers for download and rename
-        if data.startswith("cancel"):
-            try:
-                await message.edit_text("❌ **Process Cancelled**")
-            except:
-                await message.reply_text("❌ **Process Cancelled**")
-            return
-            
-        elif data.startswith(("default|", "rename|")):
-            # Existing download and rename logic remains the same
+        # Handling download and rename buttons
+        elif data.startswith("default|"):
             file_id = data.split("|")[1]
             url = pending_downloads.get(file_id)
             
             if not url:
-                try:
-                    await message.edit_text("❌ Link expired. Please send the URL again.")
-                except:
-                    await message.reply_text("❌ Link expired. Please send the URL again.")
+                await callback_query.answer("❌ Link expired. Please send the URL again.", show_alert=True)
                 return
-                
-            if data.startswith("default|"):
-                # Existing download logic
-                await handle_download_or_upload(client, message, url)
-            else:
-                await handle_download_or_upload(client, message, url, download_type="rename")
-            return
+            
+            # Use the new unified download handler
+            await handle_download_or_upload(client, message, url)
+        
+        elif data.startswith("rename|"):
+            file_id = data.split("|")[1]
+            url = pending_downloads.get(file_id)
+            
+            if not url:
+                await callback_query.answer("❌ Link expired. Please send the URL again.", show_alert=True)
+                return
+            
+            # Prompt for new filename
+            await message.edit_text(
+                "✏️ **Send me the new file name**\n\n"
+                "• Send name without extension\n"
+                "• Or /cancel to abort"
+            )
+            pending_renames[chat_id] = {"url": url, "type": "direct"}
+        
+        elif data.startswith("cancel"):
+            # Cancel download or rename
+            await message.edit_text("❌ **Process Cancelled**")
         
         else:
             # Unknown callback data
             await callback_query.answer("❌ Invalid button.", show_alert=True)
-        
+    
     except Exception as e:
-        logging.error(f"Callback Error: {str(e)}")
+        logging.error(f"Callback Handler Error: {str(e)}")
         try:
-            await message.edit_text("❌ An error occurred. Please try again.")
+            await message.edit_text(f"❌ An error occurred: {str(e)}")
         except:
-            await callback_query.answer("❌ An error occurred. Please try again.", show_alert=True)
+            await callback_query.answer(f"❌ An error occurred: {str(e)}", show_alert=True)
 
 @bot.on_message(filters.private & filters.text)
 async def handle_message(client, message):

@@ -15,6 +15,7 @@ import time
 import asyncio
 import math
 import datetime
+import traceback
 
 from pyrogram import Client, filters
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
@@ -31,38 +32,39 @@ from config import (
     OWNER_ID, MAX_FILE_SIZE, DOWNLOAD_LOCATION
 )
 
-# Define thumbnail location
-THUMB_LOCATION = os.path.join(os.path.dirname(os.path.abspath(__file__)), "thumb")
-
 # Utility functions
 from plugins.utils import get_filename, get_file_size, file_size_format
 from helpers.utils import async_download_file
 
-# Ensure thumbnail directory exists
-os.makedirs(THUMB_LOCATION, exist_ok=True)
-
 # Define text constants
 START_TEXT = """
-Hello {first_name}! 👋
+👋 **Welcome to URL Uploader Bot!**
 
-**Status**: {status}
-**Storage**: {storage}
-**Features**: {features}
+Your Status: {status}
+Storage: {storage}
 
-I'm a versatile URL Uploader Bot that can help you download and upload files from various sources!
+I can help you upload files from various sources:
+• Direct URLs 
+• YouTube links
+• Telegram files
+
+**Features Available:**
+{features}
+
+Use /help to see all available commands.
 """
 
 HELP_TEXT = """
-**Bot Usage Guide** 📘
+**Available Commands:**
 
-1. Send me a direct download link
-2. Send me a YouTube video/audio link
-3. Use inline buttons to customize download
+• `/start` - Start the bot
+• `/help` - Show this help message
+• `/about` - About the bot
+• `/broadcast` - Broadcast a message (Owner only)
 
-**Supported Sources**:
-• Direct Download Links
-• YouTube Videos
-• YouTube Audio
+**Usage:**
+
+• Send a direct download link or YouTube URL to upload a file
 """
 
 ABOUT_TEXT = """
@@ -100,7 +102,6 @@ async def extract_youtube_info(url):
                 return {
                     'url': f['url'],
                     'title': info.get('title', 'video'),
-                    'thumbnail': info.get('thumbnail'),
                     'duration': info.get('duration'),
                     'filesize': f.get('filesize', 0)
                 }
@@ -199,68 +200,6 @@ async def get_max_file_size(user_id: int) -> int:
 async def get_concurrent_downloads(user_id: int) -> int:
     return 5
 
-async def save_thumb(user_id: int, thumb_path: str):
-    try:
-        os.makedirs(THUMB_LOCATION, exist_ok=True)
-        
-        user_thumb_file = os.path.join(THUMB_LOCATION, f"{user_id}_thumb.txt")
-        
-        with open(user_thumb_file, 'w') as f:
-            f.write(thumb_path)
-        
-        return True
-    except Exception as e:
-        logging.error(f"Error saving thumb for user {user_id}: {str(e)}")
-        return False
-
-def get_thumb(user_id: int):
-    try:
-        user_thumb_file = os.path.join(THUMB_LOCATION, f"{user_id}_thumb.txt")
-        
-        if os.path.exists(user_thumb_file):
-            with open(user_thumb_file, 'r') as f:
-                thumb_path = f.read().strip()
-            
-            if os.path.exists(thumb_path):
-                return thumb_path
-        
-        return None
-    except Exception as e:
-        logging.error(f"Error retrieving thumb for user {user_id}: {str(e)}")
-        return None
-
-async def save_photo(client, message):
-    os.makedirs(THUMB_LOCATION, exist_ok=True)
-    
-    try:
-        if not message.reply_to_message or not message.reply_to_message.photo:
-            await message.reply_text("❌ Please reply to a photo to set it as thumbnail.")
-            return
-        
-        photo = message.reply_to_message.photo
-        largest_photo = photo[-1]
-        
-        thumb_path = os.path.join(
-            THUMB_LOCATION, 
-            f"{message.from_user.id}_thumb.jpg"
-        )
-        
-        await client.download_media(
-            message.reply_to_message, 
-            file_name=thumb_path
-        )
-        
-        await save_thumb(message.from_user.id, thumb_path)
-        
-        await message.reply_text(
-            "✅ **Thumbnail saved successfully!**\n"
-            "This thumbnail will be used for your future uploads."
-        )
-    
-    except Exception as e:
-        logging.error(f"Error saving thumbnail: {str(e)}")
-        await message.reply_text(f"❌ Error saving thumbnail: {str(e)}")
-
 async def get_file_size(url):
     """Get file size from URL without downloading"""
     try:
@@ -311,7 +250,7 @@ async def async_download_file(url, filename, progress=None, progress_args=None):
 
 async def send_file_with_thumbnail(client, chat_id, document, file_name, caption, progress=None, progress_args=None):
     """
-    Send file with user's thumbnail if available
+    Send file without thumbnail
     
     :param client: Pyrogram client
     :param chat_id: Destination chat ID
@@ -322,26 +261,93 @@ async def send_file_with_thumbnail(client, chat_id, document, file_name, caption
     :param progress_args: Optional arguments for progress callback
     :return: Sent message
     """
+    start_time = time.time()
+    progress_message = None
+    
     try:
-        # Try to get user's custom thumbnail
-        thumb = await get_thumb(chat_id)
+        # Validate input parameters
+        if not document or not os.path.exists(document):
+            raise ValueError(f"Invalid document path: {document}")
         
-        # Send the file
-        sent_message = await client.send_document(
-            chat_id=chat_id,
-            document=document,
-            file_name=file_name,
-            caption=caption,
-            thumb=thumb,
-            progress=progress,
-            progress_args=progress_args
+        # Delete the progress message from download
+        try:
+            await progress_args[0].delete()
+        except Exception as delete_error:
+            logging.warning(f"Could not delete progress message: {delete_error}")
+        
+        # Send new progress message for upload
+        progress_message = await client.send_message(
+            chat_id=chat_id, 
+            text="**🔄 Preparing Upload...**"
         )
         
-        return sent_message
-    
+        try:
+            # Validate file size
+            file_size = os.path.getsize(document)
+            
+            # Ensure file is not empty
+            if file_size == 0:
+                raise ValueError("File is empty")
+            
+            # Detailed logging
+            logging.info(f"Uploading file: {document}")
+            logging.info(f"File name: {file_name}")
+            logging.info(f"File size: {file_size} bytes")
+            
+            # Upload the file
+            uploaded_file = await client.send_document(
+                chat_id=chat_id,
+                document=document,
+                file_name=file_name,
+                caption=caption,
+                progress=progress,
+                progress_args=(
+                    "📤 Uploading",
+                    progress_message,
+                    start_time
+                ),
+                force_document=True
+            )
+            
+            # Delete the progress message
+            if hasattr(progress_message, 'delete'):
+                await progress_message.delete()
+            
+            # Clean up the downloaded file
+            try:
+                os.remove(document)
+                logging.info(f"Deleted local file: {document}")
+            except Exception as cleanup_error:
+                logging.error(f"File cleanup error: {cleanup_error}")
+            
+            return uploaded_file
+            
+        except Exception as upload_error:
+            # Detailed error logging
+            logging.error(f"Upload error: {upload_error}")
+            logging.error(f"Error details: {traceback.format_exc()}")
+            
+            # Update progress message with error
+            try:
+                await progress_message.edit(
+                    f"**❌ Upload Failed!**\n\n`{str(upload_error)}`"
+                )
+            except Exception as edit_error:
+                logging.warning(f"Could not edit progress message: {edit_error}")
+                await client.send_message(
+                    chat_id=chat_id, 
+                    text=f"**❌ Upload Failed!**\n\n`{str(upload_error)}`"
+                )
+            
+            raise
+            
     except Exception as e:
-        logging.error(f"Error sending file: {str(e)}")
-        raise
+        logging.error(f"General upload error: {e}")
+        try:
+            await message.reply_text(f"❌ **Upload Process Failed!**\n\n`{str(e)}`")
+        except:
+            pass
+        return None
 
 async def handle_download_or_upload(
     client, 
@@ -459,9 +465,11 @@ async def handle_download_or_upload(
                         )
                     else:
                         # Generic document
-                        sent_file = await client.send_document(
+                        sent_file = await send_file_with_thumbnail(
+                            client=client,
                             chat_id=message.chat.id,
                             document=downloaded_file,
+                            file_name=os.path.basename(downloaded_file),
                             caption=f"📤 **Upload Complete!**\n\n**Filename:** `{os.path.basename(downloaded_file)}`",
                             progress=progress_for_pyrogram,
                             progress_args=(progress_msg, start_time, os.path.basename(downloaded_file), upload_file_size, "upload")
@@ -1009,7 +1017,6 @@ async def start_command(client, message: Message):
             client=client,
             chat_id=message.chat.id,
             text=START_TEXT.format(
-                first_name=message.from_user.first_name,
                 status=status,
                 storage=storage,
                 features=features
@@ -1179,7 +1186,6 @@ async def callback_handler(client, callback_query):
                 
                 await message.edit_text(
                     START_TEXT.format(
-                        first_name=callback_query.from_user.first_name,
                         status=status,
                         storage=storage,
                         features=features
@@ -1224,7 +1230,9 @@ async def callback_handler(client, callback_query):
                 ])
                 
                 await message.edit_text(
-                    "**⚙️ Settings**\n\nNo settings configured yet.",
+                    "**⚙️ Bot Settings**\n\n"
+                    "Customize your bot experience:\n"
+                    "• Personalize your uploads",
                     reply_markup=keyboard
                 )
             
@@ -1758,7 +1766,9 @@ class FastDownloadEngine:
                     
                     if total_bytes > 0:
                         progress = (downloaded_bytes / total_bytes) * 100
-                        asyncio.create_task(progress_callback(progress, downloaded_bytes, total_bytes))
+                        asyncio.create_task(
+                            progress_callback(progress, downloaded_bytes, total_bytes)
+                        )
             
             # Add progress hook
             ydl_opts['progress_hooks'].append(progress_hook)
@@ -1793,7 +1803,7 @@ class FastDownloadEngine:
         except Exception as e:
             self.logger.error(f"YouTube download error: {e}")
             raise
-
+    
 # Global download engine
 download_engine = FastDownloadEngine()
 
@@ -1805,7 +1815,7 @@ async def safe_upload_file(
     caption=None
 ):
     """
-    Safe file upload with robust error handling and multiple fallback methods
+    Safe file upload with comprehensive error handling and multiple fallback methods
     
     :param client: Telegram client
     :param chat_id: Destination chat ID
@@ -1816,13 +1826,25 @@ async def safe_upload_file(
     """
     try:
         # Validate input parameters
-        if not file_path or not os.path.exists(file_path):
-            logging.error(f"Invalid file path: {file_path}")
+        if not file_path:
+            logging.error("File path is None")
             if progress_msg:
                 try:
-                    await progress_msg.edit_text("❌ **Upload Failed**: Invalid file path")
-                except:
+                    await progress_msg.edit_text("❌ **Upload Failed**: Invalid file path (None)")
+                except Exception as edit_error:
+                    logging.error(f"Error editing message: {edit_error}")
                     await progress_msg.reply_text("❌ **Upload Failed**: Invalid file path")
+            return None
+        
+        # Check file existence
+        if not os.path.exists(file_path):
+            logging.error(f"File does not exist: {file_path}")
+            if progress_msg:
+                try:
+                    await progress_msg.edit_text(f"❌ **Upload Failed**: File not found\nPath: `{file_path}`")
+                except Exception as edit_error:
+                    logging.error(f"Error editing message: {edit_error}")
+                    await progress_msg.reply_text(f"❌ **Upload Failed**: File not found\nPath: `{file_path}`")
             return None
         
         # Determine file type
@@ -1836,7 +1858,8 @@ async def safe_upload_file(
             if progress_msg:
                 try:
                     await progress_msg.edit_text(f"❌ **Upload Failed**: File too large ({file_size/1024/1024:.2f} MB)")
-                except:
+                except Exception as edit_error:
+                    logging.error(f"Error editing message: {edit_error}")
                     await progress_msg.reply_text(f"❌ **Upload Failed**: File too large ({file_size/1024/1024:.2f} MB)")
             return None
         
@@ -1848,7 +1871,7 @@ async def safe_upload_file(
         def progress_callback(current, total):
             try:
                 if progress_msg:
-                    progress = (current / total) * 100
+                    progress = (current / total) * 100 if total > 0 else 0
                     asyncio.create_task(
                         safe_edit_progress(
                             progress_msg, 
@@ -1865,8 +1888,15 @@ async def safe_upload_file(
             ('send_audio', client.send_audio)
         ]
         
+        # Detailed logging of file attributes
+        logging.info(f"Preparing to upload file: {file_path}")
+        logging.info(f"File extension: {file_extension}")
+        logging.info(f"File size: {file_size} bytes")
+        
         for method_name, upload_method in upload_methods:
             try:
+                logging.info(f"Attempting upload with method: {method_name}")
+                
                 # Attempt upload with specific method
                 uploaded_file = await upload_method(
                     chat_id=chat_id,
@@ -1881,13 +1911,15 @@ async def safe_upload_file(
                 # Optional: Delete local file after successful upload
                 try:
                     os.remove(file_path)
+                    logging.info(f"Deleted local file: {file_path}")
                 except Exception as cleanup_error:
                     logging.warning(f"File cleanup error: {cleanup_error}")
                 
                 return uploaded_file
             
             except Exception as upload_error:
-                logging.warning(f"Upload method {method_name} failed: {upload_error}")
+                logging.error(f"Upload method {method_name} failed: {upload_error}")
+                logging.error(f"Error details: {traceback.format_exc()}")
                 continue
         
         # If all upload methods fail
@@ -1895,17 +1927,21 @@ async def safe_upload_file(
         if progress_msg:
             try:
                 await progress_msg.edit_text("❌ **Upload Failed**: Unable to upload file")
-            except:
+            except Exception as edit_error:
+                logging.error(f"Error editing message: {edit_error}")
                 await progress_msg.reply_text("❌ **Upload Failed**: Unable to upload file")
         
         return None
     
     except Exception as general_error:
         logging.error(f"General upload error: {general_error}")
+        logging.error(f"Error details: {traceback.format_exc()}")
+        
         if progress_msg:
             try:
                 await progress_msg.edit_text(f"❌ **Upload Failed**: {str(general_error)}")
-            except:
+            except Exception as edit_error:
+                logging.error(f"Error editing message: {edit_error}")
                 await progress_msg.reply_text(f"❌ **Upload Failed**: {str(general_error)}")
         
         return None
@@ -1932,118 +1968,3 @@ async def safe_edit_progress(message, text):
             await message.reply_text(text)
         except Exception as reply_error:
             logging.error(f"Failed to update progress: {reply_error}")
-
-# Update handle_download_or_upload to use safe_upload_file
-async def handle_download_or_upload(
-    client, 
-    message, 
-    url, 
-    download_type="default", 
-    custom_filename=None
-):
-    """
-    Unified handler for downloading and uploading files
-    
-    :param client: Pyrogram client
-    :param message: Original message
-    :param url: URL to download from
-    :param download_type: Type of download (default/rename)
-    :param custom_filename: Custom filename for the download
-    :return: Path of downloaded file or None
-    """
-    try:
-        # Generate a unique file ID
-        file_id = str(uuid.uuid4())
-        
-        # Send initial progress message
-        start_time = time.time()
-        try:
-            progress_msg = await message.reply_text(
-                "🔄 **Preparing Download**...", 
-                quote=True
-            )
-        except Exception as progress_msg_error:
-            logging.warning(f"Could not send progress message: {progress_msg_error}")
-            progress_msg = message
-        
-        # Determine filename
-        if custom_filename:
-            filename = f"{custom_filename}"
-        else:
-            # Extract filename from URL or generate a unique name
-            filename = url.split('/')[-1] if url.split('/')[-1] else str(uuid.uuid4())
-        
-        # Sanitize filename
-        filename = re.sub(r'[^\w\-_\. ]', '_', filename)
-        
-        # Ensure filename has an extension
-        if '.' not in filename:
-            filename += '.bin'  # Default extension if none exists
-        
-        try:
-            # Attempt to get file size
-            async with aiohttp.ClientSession() as session:
-                async with session.head(url, allow_redirects=True) as response:
-                    file_size = int(response.headers.get('Content-Length', 0))
-        except Exception:
-            file_size = 0
-        
-        # Download the file
-        try:
-            # Determine download method based on URL
-            if "youtube.com" in url or "youtu.be" in url:
-                # YouTube download
-                downloaded_file = await download_engine.download_youtube(
-                    url, 
-                    filename=filename,
-                    progress_callback=lambda progress, downloaded, total: 
-                        asyncio.create_task(safe_edit_progress(
-                            progress_msg, 
-                            f"🎥 **Downloading**: {progress:.1f}% ({downloaded/1024/1024:.1f}/{total/1024/1024:.1f} MB)"
-                        ))
-                )
-            else:
-                # Direct download
-                downloaded_file = await download_engine.download_file(
-                    url, 
-                    filename=filename,
-                    progress_callback=lambda progress, downloaded, total: 
-                        asyncio.create_task(safe_edit_progress(
-                            progress_msg, 
-                            f"📥 **Downloading**: {progress:.1f}% ({downloaded/1024/1024:.1f}/{total/1024/1024:.1f} MB)"
-                        ))
-                )
-            
-            # Check if download was successful
-            if not downloaded_file or not os.path.exists(downloaded_file):
-                if hasattr(progress_msg, 'edit_text'):
-                    await progress_msg.edit_text("❌ **Download Failed**: Unable to download file")
-                else:
-                    await progress_msg.reply_text("❌ **Download Failed**: Unable to download file")
-                return None
-            
-            # Upload the file
-            uploaded_file = await safe_upload_file(
-                client, 
-                message.chat.id, 
-                downloaded_file, 
-                progress_msg=progress_msg
-            )
-            
-            return uploaded_file
-        
-        except Exception as download_error:
-            logging.error(f"Download Error: {download_error}")
-            if hasattr(progress_msg, 'edit_text'):
-                await progress_msg.edit_text(f"❌ **Download Failed**: {str(download_error)}")
-            else:
-                await progress_msg.reply_text(f"❌ **Download Failed**: {str(download_error)}")
-            return None
-    
-    except Exception as e:
-        logging.error(f"General Download/Upload Error: {e}")
-        try:
-            await message.reply_text(f"❌ **Process Failed**: {str(e)}")
-        except:
-            pass
-        return None

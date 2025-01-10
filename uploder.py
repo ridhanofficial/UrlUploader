@@ -766,32 +766,55 @@ async def broadcast_message(client, message: Message):
     await broadcast_handler(client, message)
 
 @bot.on_message(filters.private & filters.text)
-async def handle_text_message(client, message: Message):
-    """
-    Handle incoming text messages
-    Only respond to specific types of messages (URLs, commands)
-    """
-    # Ignore plain text messages
-    if not any([
-        message.text.startswith(('http://', 'https://', 'ftp://')),  # Direct URLs
-        'youtu' in message.text.lower(),  # YouTube links
-        message.text.startswith('/')  # Commands
-    ]):
-        # Optionally, you can delete plain text messages
-        try:
-            await client.delete_messages(
-                chat_id=message.chat.id, 
-                message_ids=[message.id]
-            )
-        except Exception:
-            pass
-        return
-
-    # Handle URLs and YouTube links
-    if message.text.startswith(('http://', 'https://', 'ftp://')) or 'youtu' in message.text.lower():
-        await download_url(client, message)
+async def handle_message(client, message):
+    text = message.text
+    chat_id = message.chat.id
     
-    # Commands are already handled by their specific handlers
+    if text.startswith("/"):
+        return
+        
+    if chat_id in pending_renames:
+        if text.lower() == "/cancel":
+            pending_renames.pop(chat_id)
+            await message.reply_text("❌ Process Cancelled")
+            return
+            
+        rename_info = pending_renames.pop(chat_id)
+        if rename_info.get("type") == "youtube":
+            await download_youtube(client, message, rename_info["url"], text)
+        else:
+            await handle_download(client, message, rename_info["url"], text)
+        return
+        
+    if re.match(YOUTUBE_REGEX, text):
+        await process_youtube(client, message, text)
+    elif re.match(URL_REGEX, text):
+        file_id = str(uuid.uuid4())
+        pending_downloads[file_id] = text
+        
+        file_size = await get_file_size(text)
+        original_filename = await get_filename(text) or "File"
+        size_text = humanbytes(file_size) if file_size else "Unknown"
+        
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("⚡️ Quick Download", callback_data=f"default|{file_id}"),
+                InlineKeyboardButton("✏️ Custom Name", callback_data=f"rename|{file_id}")
+            ],
+            [
+                InlineKeyboardButton("❌ Cancel", callback_data=f"cancel|{file_id}")
+            ]
+        ])
+        
+        await message.reply_text(
+            f"**🔗 URL Detected!**\n\n"
+            f"📦 **File Size:** {size_text}\n"
+            f"📄 **Original Name:** `{original_filename}`\n"
+            f"🎯 **Choose an option:**",
+            reply_markup=keyboard
+        )
+    else:
+        await message.reply_text("❌ **Please send me a valid direct download link or YouTube URL!**")
 
 async def start():
     """Start both bot and user client"""
@@ -823,58 +846,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-@bot.on_message(filters.private & filters.text)
-async def handle_message(client, message):
-    text = message.text
-    chat_id = message.chat.id
-    
-    if text.startswith("/"):
-        return  # Let command handlers handle commands
-        
-    # Check if this is a rename request
-    if chat_id in pending_renames:
-        if text.lower() == "/cancel":
-            pending_renames.pop(chat_id)
-            await message.reply_text("❌ Process Cancelled")
-            return
-            
-        rename_info = pending_renames.pop(chat_id)
-        if rename_info.get("type") == "youtube":
-            await download_youtube(client, message, rename_info["url"], text)
-        else:
-            await handle_download(client, message, rename_info["url"], text)
-        return
-        
-    # Check if URL is YouTube
-    if re.match(YOUTUBE_REGEX, text):
-        await process_youtube(client, message, text)
-    elif re.match(URL_REGEX, text):
-        # Handle normal URL download
-        file_id = str(uuid.uuid4())
-        pending_downloads[file_id] = text
-        
-        # Get file size and name
-        file_size = await get_file_size(text)
-        original_filename = await get_filename(text) or "File"
-        size_text = humanbytes(file_size) if file_size else "Unknown"
-        
-        keyboard = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("⚡️ Quick Download", callback_data=f"default|{file_id}"),
-                InlineKeyboardButton("✏️ Custom Name", callback_data=f"rename|{file_id}")
-            ],
-            [
-                InlineKeyboardButton("❌ Cancel", callback_data=f"cancel|{file_id}")
-            ]
-        ])
-        
-        await message.reply_text(
-            f"**🔗 URL Detected!**\n\n"
-            f"📦 **File Size:** {size_text}\n"
-            f"📄 **Original Name:** `{original_filename}`\n"
-            f"🎯 **Choose an option:**",
-            reply_markup=keyboard
-        )
-    else:
-        await message.reply_text("❌ **Please send me a valid direct download link or YouTube URL!**")

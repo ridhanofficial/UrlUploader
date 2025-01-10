@@ -490,20 +490,31 @@ async def callback_handler(client, callback_query):
 
 async def start():
     """Start both bot and user client"""
-    await bot.start()
-    await user.start()
-    print("Bot started successfully!")
-    
-    # Keep the bot running
-    while True:
-        await asyncio.sleep(1)
-
-if __name__ == "__main__":
     try:
-        asyncio.run(start())
+        await bot.start()
+        await user.start()
+        print("Bot started successfully!")
+        
+        # Keep the bot running
+        while True:
+            await asyncio.sleep(60)  # Sleep for 60 seconds
+            
+    except Exception as e:
+        print(f"Error: {str(e)}")
+    finally:
+        # Cleanup
+        await bot.stop()
+        await user.stop()
+
+def main():
+    """Run the bot"""
+    loop = asyncio.get_event_loop()
+    try:
+        loop.run_until_complete(start())
     except KeyboardInterrupt:
         print("Bot stopped!")
     finally:
-        # Clean up
-        asyncio.run(bot.stop())
-        asyncio.run(user.stop())
+        loop.close()
+
+if __name__ == "__main__":
+    main()

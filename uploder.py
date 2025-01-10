@@ -4,74 +4,77 @@ import uuid
 import time
 import logging
 import asyncio
+import math
 
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message
-
-import yt_dlp
-
-from config import Config, START_TEXT, HELP_TEXT, ABOUT_TEXT
-from plugins.utils import get_filename, get_file_size
-from helpers.utils import async_download_file
-
 from pyrogram.enums import ParseMode
 from pyrogram.errors import FloodWait
-import math
-import aiohttp
-from pyrogram import Client, filters
-from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message
-from pyrogram.errors import FloodWait
-import math
+
 import yt_dlp
+import aiohttp
 
-from plugins.utils import (
-    async_download_file,
-    get_file_size, 
-    file_size_format,
-    get_filename,
-    progressArgs
-)
-
+# Import config variables directly
 from config import (
-    API_ID,
-    API_HASH,
-    BOT_TOKEN,
-    SESSION_STRING,
-    MAX_FILE_SIZE,
-    DOWNLOAD_LOCATION,
-    OWNER_ID
+    API_ID, API_HASH, BOT_TOKEN, SESSION_STRING, 
+    OWNER_ID, MAX_FILE_SIZE, DOWNLOAD_LOCATION,
+    THUMB_LOCATION
 )
 
-# Define FORCE_SUB_CHANNEL if not present in config
-try:
-    from config import FORCE_SUB_CHANNEL
-except ImportError:
-    FORCE_SUB_CHANNEL = "@RSforeverBots"  # Default channel
-
-# Fallback for THUMB_LOCATION if not imported
-THUMB_LOCATION = os.path.join(os.path.dirname(os.path.abspath(__file__)), "thumb")
+# Utility functions
+from plugins.utils import get_filename, get_file_size, file_size_format
+from helpers.utils import async_download_file
 
 # Ensure thumbnail directory exists
 os.makedirs(THUMB_LOCATION, exist_ok=True)
 
-# Initialize bot with proper settings
-bot = Client(
-    "uploader_bot", 
-    api_id=API_ID,
-    api_hash=API_HASH,
-    bot_token=BOT_TOKEN,
-    workers=2,  # Reduced workers to prevent overload
-    parse_mode=ParseMode.MARKDOWN
-)
+# Define text constants
+START_TEXT = """
+👋 Hi {}, I'm a Telegram File Uploader Bot!
 
-# Initialize user client for large files
-user = Client(
-    "user_session",
-    api_id=API_ID,
-    api_hash=API_HASH,
-    session_string=SESSION_STRING,
-    workers=2  # Reduced workers to prevent overload
-)
+I can help you:
+• Upload files from direct links
+• Download YouTube videos and audio
+• Customize file names
+• And much more!
+
+Use /help to see all available commands.
+"""
+
+HELP_TEXT = """
+📥 **File Upload Commands**
+• Send me a direct link to upload a file
+• Send a YouTube link to download video/audio
+
+🎛️ **Available Features**
+• Direct file upload
+• YouTube video download
+• YouTube audio download
+• Custom file naming
+• Thumbnail support
+
+📝 **How to Use**
+1. Send a direct download link
+2. Send a YouTube video link
+3. Choose download options
+4. Customize file name if needed
+
+❓ **Need More Help?**
+Contact @your_support_username
+"""
+
+ABOUT_TEXT = """
+🤖 **Bot Details**
+• Version: 2.0
+• Language: Python
+• Library: Pyrogram
+
+👨‍💻 **Developer**
+• @your_username
+
+🔗 **Source Code**
+• Available on request
+"""
 
 # Constants and storage
 pending_downloads = {}
@@ -426,60 +429,24 @@ async def get_user_info(user_id: int):
 • Basic thumbnails
 • Standard support"""
 
-# Bot about text
-ABOUT_TEXT = """
-🤖 **URL Uploader Bot**
+# Initialize bot with proper settings
+bot = Client(
+    "uploader_bot", 
+    api_id=API_ID,
+    api_hash=API_HASH,
+    bot_token=BOT_TOKEN,
+    workers=2,  # Reduced workers to prevent overload
+    parse_mode=ParseMode.MARKDOWN
+)
 
-**Version:** 2.0 Free Edition
-**Developer:** Your Name
-
-**Features:**
-• Upload files up to 2GB
-• Direct URL downloads
-• YouTube link support
-• Custom thumbnails
-• File renaming
-
-**Support:**
-• Telegram: @your_support_username
-• GitHub: [Your GitHub Repo]
-
-Thank you for using our bot! 
-"""
-
-START_TEXT = """
-👋 **Welcome to URL Uploader Bot!**
-
-Your Status: {status}
-Storage: {storage}
-
-I can help you upload files from various sources:
-• Direct URLs 
-• YouTube links
-• Telegram files
-
-**Features Available:**
-{features}
-
-Use /help to see all available commands.
-"""
-
-HELP_TEXT = """
-**Available Commands:**
-
-• `/start` - Start the bot
-• `/help` - Show this help message
-• `/about` - About the bot
-• `/thumb` - Set a custom thumbnail
-• `/delthumb` - Delete custom thumbnail
-• `/broadcast` - Broadcast a message (Owner only)
-
-**Usage:**
-
-• Send a direct download link or YouTube URL to upload a file
-• Use `/thumb` to set a custom thumbnail
-• Use `/delthumb` to delete the custom thumbnail
-"""
+# Initialize user client for large files
+user = Client(
+    "user_session",
+    api_id=API_ID,
+    api_hash=API_HASH,
+    session_string=SESSION_STRING,
+    workers=2  # Reduced workers to prevent overload
+)
 
 @bot.on_message(filters.command(["help"]) & filters.private)
 async def help_command(client, message: Message):

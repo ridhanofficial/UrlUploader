@@ -25,7 +25,8 @@ from config import (
     SESSION_STRING,
     MAX_FILE_SIZE,
     DOWNLOAD_LOCATION,
-    OWNER_ID
+    OWNER_ID,
+    FORCE_SUB_CHANNEL
 )
 
 bot = Client(
@@ -34,13 +35,17 @@ bot = Client(
     api_hash=API_HASH,
     bot_token=BOT_TOKEN,
     workers=1000,
-    parse_mode=ParseMode.MARKDOWN
+    parse_mode=ParseMode.MARKDOWN,
+    sleep_threshold=None
 )
 
 user = Client(
     "user_session",
+    api_id=API_ID,
+    api_hash=API_HASH,
+    session_string=SESSION_STRING,
     workers=1000,
-    session_string=SESSION_STRING
+    sleep_threshold=None
 )
 
 pending_renames = {}
@@ -104,7 +109,7 @@ async def force_sub(client, message: Message):
         try:
             await client.get_chat_member(channel, user_id)
             return True
-        except UserNotParticipant:
+        except Exception:
             buttons = [[
                 InlineKeyboardButton("🔔 Join Channel", url=f"https://t.me/{channel.replace('@', '')}")
             ]]
@@ -201,8 +206,19 @@ async def send_file_with_thumbnail(client, chat_id, document, file_name, caption
         try:
             # Use user client for large files
             file_size = os.path.getsize(document)
+            
+            # Check if user is premium
+            try:
+                user_me = await user.get_me()
+                is_premium = user_me.is_premium
+            except Exception:
+                is_premium = False
+            
             if file_size > 2 * 1024 * 1024 * 1024:  # If file is larger than 2GB
-                await progress_message.edit("**🔄 File size > 2GB, using user account for upload...**")
+                if not is_premium:
+                    raise Exception("User account must be premium to upload files larger than 2GB!")
+                
+                await progress_message.edit("**🔄 File size > 2GB, using premium user account for upload...**")
                 await user.send_document(
                     chat_id=chat_id,
                     document=document,
@@ -214,7 +230,8 @@ async def send_file_with_thumbnail(client, chat_id, document, file_name, caption
                         "📤 Uploading",
                         progress_message,
                         start_time
-                    )
+                    ),
+                    force_document=True
                 )
             else:
                 await client.send_document(
@@ -228,18 +245,25 @@ async def send_file_with_thumbnail(client, chat_id, document, file_name, caption
                         "📤 Uploading",
                         progress_message,
                         start_time
-                    )
+                    ),
+                    force_document=True
                 )
             # Delete progress message after upload
             await progress_message.delete()
         except Exception as e:
             # If sending fails, show error
-            await progress_message.edit(f"**❌ Upload Failed!**\n\n`{str(e)}`")
+            error_msg = str(e)
+            if "premium" in error_msg.lower():
+                error_msg = "❌ **Premium Account Required!**\n\nTo upload files larger than 2GB, the user account must be Telegram Premium."
+            await progress_message.edit(f"**❌ Upload Failed!**\n\n`{error_msg}`")
             raise e
             
     except Exception as e:
         try:
-            await progress_message.edit(f"**❌ Upload Failed!**\n\n`{str(e)}`")
+            error_msg = str(e)
+            if "premium" in error_msg.lower():
+                error_msg = "❌ **Premium Account Required!**\n\nTo upload files larger than 2GB, the user account must be Telegram Premium."
+            await progress_message.edit(f"**❌ Upload Failed!**\n\n`{error_msg}`")
         except Exception:
             pass
         raise e
@@ -400,6 +424,13 @@ async def handle_message(client, message: Message):
             text="**🔄 Checking file size...**"
         )
         
+        # Check if user is premium for large files
+        try:
+            user_me = await user.get_me()
+            is_premium = user_me.is_premium
+        except Exception:
+            is_premium = False
+        
         # Check file size first
         file_size = await get_file_size(url)
         if file_size > MAX_FILE_SIZE:
@@ -408,12 +439,19 @@ async def handle_message(client, message: Message):
                 f"Maximum allowed size is {humanbytes(MAX_FILE_SIZE)}"
             )
             return
+        elif file_size > 2 * 1024 * 1024 * 1024 and not is_premium:
+            await progress_msg.edit(
+                f"❌ **Premium Required!**\n\n"
+                f"File size ({humanbytes(file_size)}) requires Telegram Premium.\n"
+                f"Maximum size without Premium is 2GB."
+            )
+            return
         elif file_size == 0:
             await progress_msg.edit("⚠️ **Couldn't determine file size, attempting download...**")
         else:
             size_info = f"File size: {humanbytes(file_size)}"
             if file_size > 2 * 1024 * 1024 * 1024:
-                size_info += "\n⚠️ Large file will be uploaded using user account"
+                size_info += "\n⚠️ Large file will be uploaded using premium account"
             await progress_msg.edit(f"**🔄 Starting download...**\n\n{size_info}")
         
         # Start download
@@ -445,11 +483,13 @@ async def handle_message(client, message: Message):
             pass
             
     except Exception as e:
-        error_msg = f"**❌ Download Failed!**\n\n`{str(e)}`"
+        error_msg = str(e)
+        if "premium" in error_msg.lower():
+            error_msg = "❌ **Premium Account Required!**\n\nTo upload files larger than 2GB, the user account must be Telegram Premium."
         try:
-            await progress_msg.edit(error_msg)
+            await progress_msg.edit(f"**❌ Download Failed!**\n\n`{error_msg}`")
         except Exception:
-            await client.send_message(chat_id, error_msg)
+            await client.send_message(chat_id, f"**❌ Download Failed!**\n\n`{error_msg}`")
 
 # Command handlers
 @bot.on_message(filters.command(["start"]) & filters.private)

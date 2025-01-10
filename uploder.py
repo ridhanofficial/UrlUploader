@@ -374,44 +374,209 @@ def TimeFormatter(milliseconds: int) -> str:
         ((str(milliseconds) + "ms, ") if milliseconds else "")
     return tmp[:-2]
 
-# Bot start text
+async def check_user_premium(user_id: int) -> bool:
+    """Check if user has premium features"""
+    try:
+        # Implement your premium check logic here
+        # This is a placeholder - replace with actual premium verification
+        return False
+    except Exception:
+        return False
+
+# Bot start text with dynamic premium info
 START_TEXT = """
 👋 **Welcome to URL Uploader Bot!**
 
+Your Status: {premium_status}
+Storage: {storage_limit}
+
 I can help you upload files from various sources:
-• Direct URLs
+• Direct URLs 
 • YouTube links
 • Telegram files
 
-**Features:**
-• Upload files up to 4GB
-• Custom thumbnails
-• File size and type detection
+**Features Available:**
+{features}
 
 Use /help to see all available commands.
 """
 
-# Message handlers
+async def get_user_info(user_id: int):
+    """Get user's premium status and features"""
+    is_premium = await check_user_premium(user_id)
+    
+    if is_premium:
+        status = "🌟 Premium User"
+        storage = "Up to 4GB per file"
+        features = """
+• Upload files up to 4GB
+• Priority processing
+• Custom thumbnails
+• Advanced file naming
+• Premium support"""
+    else:
+        status = "⭐ Free User"
+        storage = "Up to 2GB per file"
+        features = """
+• Upload files up to 2GB
+• Basic thumbnails
+• Standard support"""
+        
+    return status, storage, features
+
 @bot.on_message(filters.command(["start"]))
 async def start_command(client, message):
+    """Handle the /start command with premium info"""
+    # Get user's premium status
+    status, storage, features = await get_user_info(message.from_user.id)
+    
+    # Create premium-aware keyboard
     keyboard = InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("✨ Help", callback_data="help"),
-            InlineKeyboardButton("📊 About", callback_data="about")
+            InlineKeyboardButton("⚙️ Settings", callback_data="settings"),
+            InlineKeyboardButton("⭐ Premium", callback_data="premium_info")
         ],
         [
-            InlineKeyboardButton("💫 Support", url="https://t.me/your_support")
+            InlineKeyboardButton("❓ Help", callback_data="help"),
+            InlineKeyboardButton("🤖 About", callback_data="about")
         ]
     ])
-    await message.reply_text(START_TEXT, reply_markup=keyboard)
 
-@bot.on_message(filters.command(["help"]))
-async def help_command(client, message):
-    await message.reply_text(HELP_TEXT)
+    # Send start message with premium info
+    await message.reply_text(
+        START_TEXT.format(
+            premium_status=status,
+            storage_limit=storage,
+            features=features
+        ),
+        reply_markup=keyboard,
+        disable_web_page_preview=True
+    )
 
-@bot.on_message(filters.command(["about"]))
-async def about_command(client, message):
-    await message.reply_text(ABOUT_TEXT)
+@bot.on_callback_query()
+async def callback_handler(client, callback_query):
+    """Handle inline button callbacks"""
+    data = callback_query.data
+    
+    # Premium info handler
+    if data == "premium_info":
+        is_premium = await check_user_premium(callback_query.from_user.id)
+        
+        if is_premium:
+            text = """
+🌟 **Premium User Features**
+
+• 4GB file uploads
+• Priority processing
+• Custom thumbnails
+• Advanced file naming
+• Premium support
+
+You are already enjoying premium features! 🎉
+"""
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔙 Back", callback_data="start")]
+            ])
+        else:
+            text = """
+⭐ **Upgrade to Premium**
+
+Unlock exclusive features:
+• Upload files up to 4GB
+• Priority processing
+• Custom thumbnails
+• Advanced file naming
+• Premium support
+
+Current Status: Free User
+"""
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("💎 Upgrade Now", url="https://t.me/your_premium_bot")],
+                [InlineKeyboardButton("🔙 Back", callback_data="start")]
+            ])
+            
+        await callback_query.edit_message_text(
+            text,
+            reply_markup=keyboard
+        )
+    
+    # Help callback
+    elif data == "help":
+        help_text = """
+📘 **Bot Help & Commands**
+
+• `/start` - Start the bot
+• `/help` - Show help message
+• `/about` - About the bot
+• `/thumb` - Set custom thumbnail
+• `/delthumb` - Delete thumbnail
+• `/showthumb` - View thumbnail
+
+**Uploading Files:**
+1. Send direct URL
+2. Send YouTube link
+3. Upload file directly
+"""
+        await callback_query.edit_message_text(
+            help_text, 
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔙 Back", callback_data="start")]
+            ])
+        )
+    
+    # About callback
+    elif data == "about":
+        about_text = """
+🤖 **URL Uploader Bot**
+
+**Features:**
+• Upload files from URLs
+• YouTube video downloads
+• Custom thumbnails
+• File size up to 2GB
+
+**Created with ❤️ by Your Team**
+"""
+        await callback_query.edit_message_text(
+            about_text,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔙 Back", callback_data="start")]
+            ])
+        )
+    
+    # Settings callback
+    elif data == "settings":
+        await OpenSettings(callback_query.message)
+    
+    # Return to start
+    elif data == "start":
+        status, storage, features = await get_user_info(callback_query.from_user.id)
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("⚙️ Settings", callback_data="settings"),
+                InlineKeyboardButton("⭐ Premium", callback_data="premium_info")
+            ],
+            [
+                InlineKeyboardButton("❓ Help", callback_data="help"),
+                InlineKeyboardButton("🤖 About", callback_data="about")
+            ]
+        ])
+        await callback_query.edit_message_text(
+            START_TEXT.format(
+                premium_status=status,
+                storage_limit=storage,
+                features=features
+            ), 
+            reply_markup=keyboard,
+            disable_web_page_preview=True
+        )
+    
+    # Close callback
+    elif data == "close":
+        await callback_query.message.delete()
+    
+    # Acknowledge the callback query
+    await callback_query.answer()
 
 async def save_photo(client, message):
     """Save photo as thumbnail"""
@@ -534,173 +699,6 @@ async def handle_message(client, message):
     else:
         await message.reply_text("❌ **Please send me a valid direct download link or YouTube URL!**")
 
-@bot.on_callback_query()
-async def callback_handler(client, callback_query):
-    data = callback_query.data
-    message = callback_query.message
-    
-    try:
-        if data.startswith("ytdl|"):
-            # Handle YouTube download
-            _, url, action = data.split("|")
-            
-            if action == "default":
-                await message.edit_text("⚡ **Starting YouTube Download...**")
-                await download_youtube(client, message, url)
-            elif action == "rename":
-                await message.edit_text(
-                    "✏️ **Send me the new file name**\n\n"
-                    "• No need to add extension\n"
-                    "• Send /cancel to cancel"
-                )
-                pending_renames[message.chat.id] = {"type": "youtube", "url": url}
-                
-        elif data == "cancel":
-            await message.edit_text("❌ **Process Cancelled**")
-            
-        elif data.startswith(("default|", "rename|", "cancel|")):
-            action, file_id = data.split("|")
-            
-            if action == "cancel":
-                await message.edit_text("❌ **Download Cancelled**")
-                return
-                
-            if action == "default":
-                # Handle direct download
-                await message.edit_text("⚡ **Starting Download...**")
-                await handle_download(client, message, file_id, custom_name=None)
-                
-            elif action == "rename":
-                # Ask for new name
-                await message.edit_text(
-                    "✏️ **Send me the new file name**\n\n"
-                    "• Send /cancel to cancel the process"
-                )
-                # Store the file ID for renaming
-                pending_renames[message.chat.id] = file_id
-    
-    except Exception as e:
-        print(f"Callback Error: {str(e)}")
-    finally:
-        # Always answer the callback query to remove loading state
-        await callback_query.answer()
-
-async def handle_download(client, message, file_id, custom_name=None):
-    """Handle file download and upload"""
-    try:
-        url = pending_downloads.get(file_id)
-        if not url:
-            await message.edit_text("❌ **Download expired. Please send the URL again.**")
-            return
-            
-        # Send initial progress message
-        progress_msg = await message.edit_text("**🔄 Checking file size...**")
-        
-        # Check file size
-        file_size = await get_file_size(url)
-        if file_size > MAX_FILE_SIZE:
-            await progress_msg.edit_text(
-                f"❌ **File size ({humanbytes(file_size)}) is too large!**\n\n"
-                f"Maximum allowed size is 2GB ({humanbytes(MAX_FILE_SIZE)})"
-            )
-            return
-            
-        # Get filename
-        filename = custom_name if custom_name else await get_filename(url)
-        
-        # Download file
-        downloaded_file = await async_download_file(
-            url,
-            filename,
-            progress=progress_for_pyrogram,
-            progress_args=(progress_msg, time.time())
-        )
-        
-        # Upload file
-        await send_file_with_thumbnail(
-            client,
-            message.chat.id,
-            downloaded_file,
-            filename,
-            f"📤 **Upload Complete!**\n\n**Filename:** `{filename}`",
-            progress_for_pyrogram,
-            (progress_msg, time.time())
-        )
-        
-        # Cleanup
-        try:
-            os.remove(downloaded_file)
-        except Exception:
-            pass
-            
-    except Exception as e:
-        await message.edit_text(f"**❌ Download Failed!**\n\n`{str(e)}`")
-    finally:
-        if file_id in pending_downloads:
-            del pending_downloads[file_id]
-
-async def download_youtube(client, message, url, custom_name=None):
-    """Download and upload YouTube video"""
-    try:
-        # Get video info
-        info = await extract_youtube_info(url)
-        if not info:
-            await message.edit_text("❌ **Failed to process YouTube video**")
-            return
-            
-        # Get filename
-        filename = f"{custom_name or info['title']}.mp4"
-        filename = re.sub(r'[<>:"/\\|?*]', '', filename)  # Remove invalid chars
-        
-        # Download progress
-        progress_msg = await message.edit_text("📥 **Downloading video...**")
-        
-        # Download video
-        async with aiohttp.ClientSession() as session:
-            async with session.get(info['url']) as response:
-                if response.status == 200:
-                    total_size = int(response.headers.get('content-length', 0))
-                    
-                    with open(filename, 'wb') as f:
-                        downloaded = 0
-                        start_time = time.time()
-                        
-                        async for chunk in response.content.iter_chunked(1024*1024):
-                            if chunk:
-                                f.write(chunk)
-                                downloaded += len(chunk)
-                                await progress_for_pyrogram(
-                                    downloaded,
-                                    total_size,
-                                    "📥 Downloading",
-                                    progress_msg,
-                                    start_time
-                                )
-                    
-                    # Upload file
-                    await send_file_with_thumbnail(
-                        client,
-                        message.chat.id,
-                        filename,
-                        filename,
-                        f"📤 **Upload Complete!**\n\n"
-                        f"🎥 **Title:** `{info['title']}`\n"
-                        f"⏱ **Duration:** {TimeFormatter(info['duration'] * 1000) if info['duration'] else 'N/A'}",
-                        progress_for_pyrogram,
-                        (progress_msg, time.time())
-                    )
-                    
-                    # Cleanup
-                    try:
-                        os.remove(filename)
-                    except Exception:
-                        pass
-                else:
-                    await message.edit_text("❌ **Failed to download video**")
-                    
-    except Exception as e:
-        await message.edit_text(f"❌ **Download Failed!**\n\n`{str(e)}`")
-
 async def start():
     """Start both bot and user client"""
     try:
@@ -731,3 +729,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+4

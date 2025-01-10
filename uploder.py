@@ -563,6 +563,73 @@ async def callback_handler(client, callback_query):
             show_alert=False
         )
         
+        # Add handlers for start, help, about, and settings buttons
+        if data == "start":
+            status, storage, features = await get_user_info(callback_query.from_user.id)
+            
+            keyboard = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("⚙️ Settings", callback_data="settings"),
+                    InlineKeyboardButton("❓ Help", callback_data="help")
+                ],
+                [
+                    InlineKeyboardButton("🤖 About", callback_data="about")
+                ],
+                [
+                    InlineKeyboardButton("💫 Support", url="https://t.me/your_support")
+                ]
+            ])
+            
+            await message.edit_text(
+                START_TEXT.format(
+                    status=status,
+                    storage=storage,
+                    features=features
+                ),
+                reply_markup=keyboard,
+                disable_web_page_preview=True
+            )
+            return
+        
+        elif data == "help":
+            keyboard = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("🏠 Back to Start", callback_data="start")
+                ]
+            ])
+            
+            await message.edit_text(
+                HELP_TEXT,
+                reply_markup=keyboard,
+                disable_web_page_preview=True
+            )
+            return
+        
+        elif data == "about":
+            keyboard = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("🏠 Back to Start", callback_data="start")
+                ]
+            ])
+            
+            await message.edit_text(
+                ABOUT_TEXT,
+                reply_markup=keyboard,
+                disable_web_page_preview=True
+            )
+            return
+        
+        elif data == "settings":
+            # Add settings logic here if needed
+            await message.edit_text(
+                "**⚙️ Settings**\n\nNo settings configured yet.",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🏠 Back to Start", callback_data="start")]
+                ])
+            )
+            return
+        
+        # Existing callback handlers remain the same
         if data == "cancel":
             try:
                 await message.edit_text("❌ **Process Cancelled**")

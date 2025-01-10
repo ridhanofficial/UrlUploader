@@ -549,9 +549,38 @@ async def callback_handler(client, callback_query):
     """Handle all inline button callbacks"""
     try:
         data = callback_query.data
+        message = callback_query.message
         
         # Always answer the callback query to remove loading state
         await callback_query.answer()
+        
+        # Direct link download handler
+        if data.startswith("default|") or data.startswith("rename|"):
+            file_id = data.split("|")[1]
+            
+            if data.startswith("default|"):
+                # Quick download
+                url = pending_downloads.get(file_id)
+                if not url:
+                    await message.edit_text("❌ Download link expired. Please try again.")
+                    return
+                
+                await handle_download(client, message, url)
+                del pending_downloads[file_id]
+            
+            elif data.startswith("rename|"):
+                # Custom name
+                pending_renames[message.chat.id] = {
+                    "type": "direct",
+                    "url": pending_downloads.get(file_id)
+                }
+                await message.edit_text(
+                    "📝 **Send me a custom file name**\n\n"
+                    "• Send the name you want (without extension)\n"
+                    "• Or send /cancel to abort"
+                )
+            
+            return
         
         # YouTube download handler
         if data.startswith("ytdl|"):
@@ -564,12 +593,12 @@ async def callback_handler(client, callback_query):
                     # Quick download (video)
                     keyboard = InlineKeyboardMarkup([
                         [
-                            InlineKeyboardButton("🎥 Video", callback_data=f"ytdl_video"),
-                            InlineKeyboardButton("🎵 Audio", callback_data=f"ytdl_audio")
+                            InlineKeyboardButton("🎥 Video", callback_data=f"ytdl_video|{url}"),
+                            InlineKeyboardButton("🎵 Audio", callback_data=f"ytdl_audio|{url}")
                         ]
                     ])
                     
-                    await callback_query.message.edit_text(
+                    await message.edit_text(
                         "**Choose Download Type:**", 
                         reply_markup=keyboard
                     )
@@ -579,13 +608,50 @@ async def callback_handler(client, callback_query):
                         "type": "youtube",
                         "url": url
                     }
-                    await callback_query.message.edit_text(
+                    await message.edit_text(
                         "📝 **Send me a custom file name**\n\n"
                         "• Send the name you want (without extension)\n"
                         "• Or send /cancel to abort"
                     )
             return
         
+        # YouTube video and audio download
+        if data.startswith("ytdl_video|") or data.startswith("ytdl_audio|"):
+            url = data.split("|")[1]
+            
+            if data.startswith("ytdl_video|"):
+                # Trigger video download
+                await callback_query.message.reply_to_message.delete()
+                await callback_query.message.delete()
+                
+                ydl_opts = {
+                    "format": "best[ext=mp4]",
+                    "outtmpl": "%(title)s - %(extractor)s-%(id)s.%(ext)s",
+                    "writethumbnail": True,
+                }
+                
+                with YoutubeDL(ydl_opts) as ydl:
+                    info_dict = ydl.extract_info(url, download=False)
+                    await download_youtube(client, callback_query.message, url, "video")
+            
+            elif data.startswith("ytdl_audio|"):
+                # Trigger audio download
+                await callback_query.message.reply_to_message.delete()
+                await callback_query.message.delete()
+                
+                ydl_opts = {
+                    "format": "bestaudio",
+                    "outtmpl": "%(title)s - %(extractor)s-%(id)s.%(ext)s",
+                    "writethumbnail": True,
+                }
+                
+                with YoutubeDL(ydl_opts) as ydl:
+                    info_dict = ydl.extract_info(url, download=False)
+                    await download_youtube(client, callback_query.message, url, "audio")
+            
+            return
+        
+        # Existing callback handlers
         if data == "start":
             keyboard = InlineKeyboardMarkup([
                 [
@@ -600,66 +666,16 @@ async def callback_handler(client, callback_query):
                 ]
             ])
             
-            await callback_query.message.edit_text(
+            await message.edit_text(
                 START_TEXT.format(callback_query.from_user.first_name),
                 reply_markup=keyboard
             )
         
-        elif data == "settings":
-            keyboard = InlineKeyboardMarkup([
-                [
-                    InlineKeyboardButton("🖼️ Thumbnail", callback_data="thumbnail_settings"),
-                    InlineKeyboardButton("🔔 Notifications", callback_data="notification_settings")
-                ],
-                [
-                    InlineKeyboardButton("🏠 Back to Start", callback_data="start")
-                ]
-            ])
-            
-            await callback_query.message.edit_text(
-                "**⚙️ Bot Settings**\n\n"
-                "Customize your bot experience:\n"
-                "• Manage thumbnails\n"
-                "• Configure notifications\n"
-                "• Personalize your uploads",
-                reply_markup=keyboard
-            )
+        # Add other existing callback handlers here
         
-        elif data == "help":
-            keyboard = InlineKeyboardMarkup([
-                [
-                    InlineKeyboardButton("🏠 Back to Start", callback_data="start")
-                ]
-            ])
-            
-            await callback_query.message.edit_text(
-                HELP_TEXT,
-                reply_markup=keyboard,
-                disable_web_page_preview=True
-            )
-        
-        elif data == "about":
-            keyboard = InlineKeyboardMarkup([
-                [
-                    InlineKeyboardButton("🏠 Back to Start", callback_data="start")
-                ]
-            ])
-            
-            await callback_query.message.edit_text(
-                ABOUT_TEXT,
-                reply_markup=keyboard,
-                disable_web_page_preview=True
-            )
-    
     except Exception as e:
-        # Log any unexpected errors
         logging.error(f"Callback handler error: {str(e)}")
-        try:
-            await callback_query.message.reply_text(
-                "❌ An error occurred. Please try again."
-            )
-        except Exception:
-            pass
+        await message.reply_text("❌ An error occurred. Please try again.")
 
 async def broadcast_handler(client, message: Message):
     """

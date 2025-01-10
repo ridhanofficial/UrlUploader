@@ -423,7 +423,7 @@ async def handle_download_or_upload(
                 if hasattr(progress_msg, 'edit_text'):
                     await progress_msg.edit_text("❌ **Download Failed**: Unable to download file")
                 else:
-                    await message.reply_text("❌ **Download Failed**: Unable to download file")
+                    await progress_msg.reply_text("❌ **Download Failed**: Unable to download file")
                 return None
             
             # Upload the file
@@ -1734,10 +1734,20 @@ class FastDownloadEngine:
                 'nooverwrites': True,
                 'no_color': True,
                 'progress_hooks': [],
-                'quiet': True,
-                'no_warnings': True,
+                'quiet': False,
+                'no_warnings': False,
                 'ignoreerrors': False,
                 'noplaylist': True,
+                'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+                'merge_output_format': 'mp4',
+                'postprocessors': [{
+                    'key': 'FFmpegVideoConvertor',
+                    'preferedformat': 'mp4'
+                }],
+                # Advanced bypass techniques
+                'cookiefile': None,
+                'cookiesfrombrowser': ['chrome'],
+                'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
             }
             
             # Progress tracking hook
@@ -1755,7 +1765,22 @@ class FastDownloadEngine:
             
             # Download with yt-dlp
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info_dict = ydl.extract_info(url, download=True)
+                try:
+                    info_dict = ydl.extract_info(url, download=True)
+                except Exception as extract_error:
+                    # Advanced error handling
+                    error_msg = str(extract_error)
+                    
+                    # Specific error handling for bot/authentication issues
+                    if "Sign in to confirm you're not a bot" in error_msg:
+                        # Try alternative extraction methods
+                        ydl_opts['cookiesfrombrowser'] = None
+                        ydl_opts['cookiefile'] = None
+                        
+                        with yt_dlp.YoutubeDL(ydl_opts) as fallback_ydl:
+                            info_dict = fallback_ydl.extract_info(url, download=True)
+                    else:
+                        raise
                 
                 # Get downloaded files
                 downloaded_files = ydl.get_download_path(info_dict)
@@ -1771,3 +1796,254 @@ class FastDownloadEngine:
 
 # Global download engine
 download_engine = FastDownloadEngine()
+
+async def safe_upload_file(
+    client, 
+    chat_id, 
+    file_path, 
+    progress_msg=None,
+    caption=None
+):
+    """
+    Safe file upload with robust error handling and multiple fallback methods
+    
+    :param client: Telegram client
+    :param chat_id: Destination chat ID
+    :param file_path: Path to file to upload
+    :param progress_msg: Optional progress message
+    :param caption: Optional file caption
+    :return: Uploaded file details or None
+    """
+    try:
+        # Validate input parameters
+        if not file_path or not os.path.exists(file_path):
+            logging.error(f"Invalid file path: {file_path}")
+            if progress_msg:
+                try:
+                    await progress_msg.edit_text("❌ **Upload Failed**: Invalid file path")
+                except:
+                    await progress_msg.reply_text("❌ **Upload Failed**: Invalid file path")
+            return None
+        
+        # Determine file type
+        file_extension = os.path.splitext(file_path)[1].lower()
+        file_size = os.path.getsize(file_path)
+        
+        # File size validation
+        MAX_FILE_SIZE = 2 * 1024 * 1024 * 1024  # 2GB limit
+        if file_size > MAX_FILE_SIZE:
+            logging.error(f"File too large: {file_size} bytes")
+            if progress_msg:
+                try:
+                    await progress_msg.edit_text(f"❌ **Upload Failed**: File too large ({file_size/1024/1024:.2f} MB)")
+                except:
+                    await progress_msg.reply_text(f"❌ **Upload Failed**: File too large ({file_size/1024/1024:.2f} MB)")
+            return None
+        
+        # Default caption
+        if not caption:
+            caption = f"📤 **Uploaded File**: `{os.path.basename(file_path)}`"
+        
+        # Prepare progress tracking
+        def progress_callback(current, total):
+            try:
+                if progress_msg:
+                    progress = (current / total) * 100
+                    asyncio.create_task(
+                        safe_edit_progress(
+                            progress_msg, 
+                            f"📤 **Uploading**: {progress:.1f}% ({current/1024/1024:.1f}/{total/1024/1024:.1f} MB)"
+                        )
+                    )
+            except Exception as e:
+                logging.error(f"Progress update error: {e}")
+        
+        # Upload methods with fallback
+        upload_methods = [
+            ('send_document', client.send_document),
+            ('send_video', client.send_video),
+            ('send_audio', client.send_audio)
+        ]
+        
+        for method_name, upload_method in upload_methods:
+            try:
+                # Attempt upload with specific method
+                uploaded_file = await upload_method(
+                    chat_id=chat_id,
+                    document=file_path,
+                    caption=caption,
+                    progress=progress_callback
+                )
+                
+                # Success logging
+                logging.info(f"Successfully uploaded file using {method_name}")
+                
+                # Optional: Delete local file after successful upload
+                try:
+                    os.remove(file_path)
+                except Exception as cleanup_error:
+                    logging.warning(f"File cleanup error: {cleanup_error}")
+                
+                return uploaded_file
+            
+            except Exception as upload_error:
+                logging.warning(f"Upload method {method_name} failed: {upload_error}")
+                continue
+        
+        # If all upload methods fail
+        logging.error("All upload methods failed")
+        if progress_msg:
+            try:
+                await progress_msg.edit_text("❌ **Upload Failed**: Unable to upload file")
+            except:
+                await progress_msg.reply_text("❌ **Upload Failed**: Unable to upload file")
+        
+        return None
+    
+    except Exception as general_error:
+        logging.error(f"General upload error: {general_error}")
+        if progress_msg:
+            try:
+                await progress_msg.edit_text(f"❌ **Upload Failed**: {str(general_error)}")
+            except:
+                await progress_msg.reply_text(f"❌ **Upload Failed**: {str(general_error)}")
+        
+        return None
+
+async def safe_edit_progress(message, text):
+    """
+    Safely edit progress message with multiple fallback strategies
+    
+    :param message: Message to edit
+    :param text: Progress text
+    :return: None
+    """
+    try:
+        # Primary method: edit_text
+        await message.edit_text(text)
+    except FloodWait as flood:
+        # Handle Telegram flood wait
+        logging.warning(f"Flood wait: {flood.x} seconds")
+        await asyncio.sleep(flood.x)
+        await safe_edit_progress(message, text)
+    except Exception as e:
+        # Fallback: reply to original message
+        try:
+            await message.reply_text(text)
+        except Exception as reply_error:
+            logging.error(f"Failed to update progress: {reply_error}")
+
+# Update handle_download_or_upload to use safe_upload_file
+async def handle_download_or_upload(
+    client, 
+    message, 
+    url, 
+    download_type="default", 
+    custom_filename=None
+):
+    """
+    Unified handler for downloading and uploading files
+    
+    :param client: Pyrogram client
+    :param message: Original message
+    :param url: URL to download from
+    :param download_type: Type of download (default/rename)
+    :param custom_filename: Custom filename for the download
+    :return: Path of downloaded file or None
+    """
+    try:
+        # Generate a unique file ID
+        file_id = str(uuid.uuid4())
+        
+        # Send initial progress message
+        start_time = time.time()
+        try:
+            progress_msg = await message.reply_text(
+                "🔄 **Preparing Download**...", 
+                quote=True
+            )
+        except Exception as progress_msg_error:
+            logging.warning(f"Could not send progress message: {progress_msg_error}")
+            progress_msg = message
+        
+        # Determine filename
+        if custom_filename:
+            filename = f"{custom_filename}"
+        else:
+            # Extract filename from URL or generate a unique name
+            filename = url.split('/')[-1] if url.split('/')[-1] else str(uuid.uuid4())
+        
+        # Sanitize filename
+        filename = re.sub(r'[^\w\-_\. ]', '_', filename)
+        
+        # Ensure filename has an extension
+        if '.' not in filename:
+            filename += '.bin'  # Default extension if none exists
+        
+        try:
+            # Attempt to get file size
+            async with aiohttp.ClientSession() as session:
+                async with session.head(url, allow_redirects=True) as response:
+                    file_size = int(response.headers.get('Content-Length', 0))
+        except Exception:
+            file_size = 0
+        
+        # Download the file
+        try:
+            # Determine download method based on URL
+            if "youtube.com" in url or "youtu.be" in url:
+                # YouTube download
+                downloaded_file = await download_engine.download_youtube(
+                    url, 
+                    filename=filename,
+                    progress_callback=lambda progress, downloaded, total: 
+                        asyncio.create_task(safe_edit_progress(
+                            progress_msg, 
+                            f"🎥 **Downloading**: {progress:.1f}% ({downloaded/1024/1024:.1f}/{total/1024/1024:.1f} MB)"
+                        ))
+                )
+            else:
+                # Direct download
+                downloaded_file = await download_engine.download_file(
+                    url, 
+                    filename=filename,
+                    progress_callback=lambda progress, downloaded, total: 
+                        asyncio.create_task(safe_edit_progress(
+                            progress_msg, 
+                            f"📥 **Downloading**: {progress:.1f}% ({downloaded/1024/1024:.1f}/{total/1024/1024:.1f} MB)"
+                        ))
+                )
+            
+            # Check if download was successful
+            if not downloaded_file or not os.path.exists(downloaded_file):
+                if hasattr(progress_msg, 'edit_text'):
+                    await progress_msg.edit_text("❌ **Download Failed**: Unable to download file")
+                else:
+                    await progress_msg.reply_text("❌ **Download Failed**: Unable to download file")
+                return None
+            
+            # Upload the file
+            uploaded_file = await safe_upload_file(
+                client, 
+                message.chat.id, 
+                downloaded_file, 
+                progress_msg=progress_msg
+            )
+            
+            return uploaded_file
+        
+        except Exception as download_error:
+            logging.error(f"Download Error: {download_error}")
+            if hasattr(progress_msg, 'edit_text'):
+                await progress_msg.edit_text(f"❌ **Download Failed**: {str(download_error)}")
+            else:
+                await progress_msg.reply_text(f"❌ **Download Failed**: {str(download_error)}")
+            return None
+    
+    except Exception as e:
+        logging.error(f"General Download/Upload Error: {e}")
+        try:
+            await message.reply_text(f"❌ **Process Failed**: {str(e)}")
+        except:
+            pass
+        return None

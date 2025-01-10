@@ -74,6 +74,23 @@ AUTH_USERS - Your Telegram ID
    git add .
    git commit -m "Ready for deployment"
    git push heroku master
+
+## 🚂 Deploy to Railway
+
+[![Deploy on Railway](https://railway.app/button.svg)](https://railway.app/template/8UGhQg?referralCode=your-referral-code)
+
+1. Click the Deploy on Railway button
+2. Add the required environment variables:
+   ```
+   BOT_TOKEN - Get from @BotFather
+   API_ID - Get from my.telegram.org
+   API_HASH - Get from my.telegram.org
+   OWNER_ID - Your Telegram ID
+   AUTH_USERS - Users allowed to use the bot (optional)
+   ```
+3. Click Deploy
+
+The bot will be automatically deployed on Railway's infrastructure.
    ```
 
 ## Commands

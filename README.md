@@ -33,7 +33,6 @@ API_HASH=your_api_hash
 BOT_TOKEN=your_bot_token
 SESSION_STRING=your_session_string
 OWNER_ID=your_telegram_id
-PREMIUM_USERS=user_id1 user_id2
 ```
 
 ## 🚀 Deploy to Heroku
@@ -46,8 +45,7 @@ PREMIUM_USERS=user_id1 user_id2
 BOT_TOKEN - Get from @BotFather
 API_ID - Get from my.telegram.org
 API_HASH - Get from my.telegram.org
-OWNER_ID - Your Telegram ID
-AUTH_USERS - Users allowed to use the bot (optional)
+AUTH_USERS - Your Telegram ID
 ```
 
 ## Deployment to Heroku
@@ -69,7 +67,7 @@ AUTH_USERS - Users allowed to use the bot (optional)
    heroku config:set BOT_TOKEN=your_bot_token
    heroku config:set SESSION_STRING=your_session_string
    heroku config:set OWNER_ID=your_telegram_id
-   heroku config:set PREMIUM_USERS="user_id1 user_id2"
+
    ```
 6. Deploy to Heroku:
    ```bash

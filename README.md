@@ -17,8 +17,8 @@
 ## ✨ Features
 
 - 📥 Download files from direct URLs
-- 📈 Premium user system with enhanced features
-- 📊 Larger file size limit for premium users (10GB vs 2GB)
+- 📈 Premium enhanced features
+- 📊 Upload Up to 4GB  
 - 🔄 More concurrent downloads for premium users
 - ✏️ File renaming capability
 - 📈 Progress tracking

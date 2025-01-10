@@ -270,57 +270,41 @@ async def get_file_size(url):
     return 0
 
 async def async_download_file(url, filename, progress=None, progress_args=None):
-    """Download file using aiohttp"""
-    try:
-        # Check file size before downloading
-        file_size = await get_file_size(url)
-        if file_size > MAX_FILE_SIZE:
-            raise Exception(f"File size ({humanbytes(file_size)}) is too large. Maximum allowed size is {humanbytes(MAX_FILE_SIZE)}")
-        elif file_size == 0:
-            # If we couldn't get the file size, we'll try downloading anyway
-            logging.warning("Couldn't get file size before download")
+    """
+    Download a file using aiohttp with progress tracking
+    
+    :param url: URL of the file to download
+    :param filename: Name of the file to save
+    :param progress: Optional progress callback function
+    :param progress_args: Optional arguments for progress callback
+    :return: Path to the downloaded file
+    """
+    download_directory = "Download"
+    os.makedirs(download_directory, exist_ok=True)
+    
+    file_path = os.path.join(download_directory, filename)
+    
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url) as response:
+            if response.status != 200:
+                raise Exception(f"Download failed with status {response.status}")
             
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url) as response:
-                if response.status != 200:
-                    raise Exception(f"Failed to download: HTTP {response.status}")
-                
-                file_size = int(response.headers.get('content-length', 0))
-                if file_size > MAX_FILE_SIZE:
-                    raise Exception(f"File size ({humanbytes(file_size)}) is too large. Maximum allowed size is {humanbytes(MAX_FILE_SIZE)}")
-                
-                downloaded = 0
-                start_time = time.time()
-                
-                with open(filename, 'wb') as f:
-                    async for chunk in response.content.iter_chunked(1024):
-                        if chunk:
-                            f.write(chunk)
-                            downloaded += len(chunk)
-                            if progress:
-                                try:
-                                    await progress(
-                                        downloaded,
-                                        file_size,
-                                        "📥 Downloading",
-                                        progress_args[0],
-                                        start_time
-                                    )
-                                except Exception:
-                                    pass
-                
-                # Send completion message
-                if progress and progress_args:
-                    try:
-                        await progress_args[0].edit("**✅ Download Complete! Starting Upload...**")
-                    except Exception:
-                        pass
-                
-                return filename
-    except Exception as e:
-        if os.path.exists(filename):
-            os.remove(filename)
-        raise e
+            total_size = int(response.headers.get('content-length', 0))
+            downloaded_size = 0
+            
+            with open(file_path, "wb") as file:
+                async for chunk in response.content.iter_chunked(1024):
+                    file.write(chunk)
+                    downloaded_size += len(chunk)
+                    
+                    # Call progress callback if provided
+                    if progress and progress_args:
+                        try:
+                            await progress(downloaded_size, total_size, *progress_args)
+                        except Exception as e:
+                            logging.error(f"Progress callback error: {e}")
+    
+    return file_path
 
 async def send_file_with_thumbnail(client, chat_id, document, file_name, caption, progress, progress_args):
     """Send file with user's thumbnail if available"""
@@ -744,6 +728,11 @@ async def callback_handler(client, callback_query):
             # Trigger audio download
             ydl_opts = {
                 "format": "bestaudio",
+                "postprocessors": [{
+                    "key": "FFmpegExtractAudio",
+                    "preferredcodec": "mp3",
+                    "preferredquality": "192",
+                }],
                 "outtmpl": "%(title)s - %(extractor)s-%(id)s.%(ext)s",
                 "writethumbnail": True,
             }
@@ -789,6 +778,135 @@ async def callback_handler(client, callback_query):
     except Exception as e:
         logging.error(f"Callback handler error: {str(e)}")
         await message.reply_text("❌ An error occurred. Please try again.")
+
+async def download_youtube(client, progress_msg, url, download_type="video"):
+    """
+    Download YouTube video or audio using yt-dlp
+    
+    :param client: Pyrogram client
+    :param progress_msg: Progress message to update
+    :param url: YouTube URL
+    :param download_type: 'video' or 'audio'
+    """
+    try:
+        # Prepare download options based on type
+        if download_type == "video":
+            ydl_opts = {
+                "format": "best[ext=mp4]",
+                "outtmpl": "%(title)s - %(extractor)s-%(id)s.%(ext)s",
+                "writethumbnail": True,
+            }
+        else:  # audio
+            ydl_opts = {
+                "format": "bestaudio/best",
+                "postprocessors": [{
+                    "key": "FFmpegExtractAudio",
+                    "preferredcodec": "mp3",
+                    "preferredquality": "192",
+                }],
+                "outtmpl": "%(title)s - %(extractor)s-%(id)s.%(ext)s",
+                "writethumbnail": True,
+            }
+        
+        # Extract video information
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info_dict = ydl.extract_info(url, download=False)
+            
+            # Update progress message with video details
+            title = info_dict.get('title', 'Unknown Title')
+            uploader = info_dict.get('uploader', 'Unknown Uploader')
+            duration = info_dict.get('duration', 0)
+            
+            await progress_msg.edit_text(
+                f"📥 **Downloading {download_type.capitalize()}...**\n\n"
+                f"📹 **Title:** `{title}`\n"
+                f"👤 **Uploader:** `{uploader}`\n"
+                f"⏱️ **Duration:** {duration} seconds"
+            )
+            
+            # Download the file
+            downloaded_file = ydl.download([url])[0]
+        
+        # Prepare file for upload
+        if download_type == "video":
+            # Find the video file
+            video_file = [f for f in os.listdir() if f.endswith('.mp4')][0]
+            
+            # Get thumbnail
+            thumbnail_url = info_dict.get('thumbnail')
+            thumbnail_file = None
+            if thumbnail_url:
+                try:
+                    thumbnail_file = f"{os.path.splitext(video_file)[0]}.jpg"
+                    async with aiohttp.ClientSession() as session:
+                        async with session.get(thumbnail_url) as resp:
+                            if resp.status == 200:
+                                with open(thumbnail_file, 'wb') as f:
+                                    f.write(await resp.read())
+                except Exception as e:
+                    logging.error(f"Thumbnail download error: {e}")
+                    thumbnail_file = None
+            
+            # Upload video
+            await progress_msg.edit_text(f"📤 **Uploading Video:** `{title}`")
+            await client.send_video(
+                progress_msg.chat.id,
+                video_file,
+                caption=f"🎥 {title}",
+                duration=duration,
+                thumb=thumbnail_file,
+                progress=progress_for_pyrogram,
+                progress_args=(progress_msg, "Uploading", time.time())
+            )
+            
+            # Clean up files
+            os.remove(video_file)
+            if thumbnail_file and os.path.exists(thumbnail_file):
+                os.remove(thumbnail_file)
+        
+        else:  # audio
+            # Find the audio file
+            audio_file = [f for f in os.listdir() if f.endswith('.mp3')][0]
+            
+            # Get thumbnail
+            thumbnail_url = info_dict.get('thumbnail')
+            thumbnail_file = None
+            if thumbnail_url:
+                try:
+                    thumbnail_file = f"{os.path.splitext(audio_file)[0]}.jpg"
+                    async with aiohttp.ClientSession() as session:
+                        async with session.get(thumbnail_url) as resp:
+                            if resp.status == 200:
+                                with open(thumbnail_file, 'wb') as f:
+                                    f.write(await resp.read())
+                except Exception as e:
+                    logging.error(f"Thumbnail download error: {e}")
+                    thumbnail_file = None
+            
+            # Upload audio
+            await progress_msg.edit_text(f"📤 **Uploading Audio:** `{title}`")
+            await client.send_audio(
+                progress_msg.chat.id,
+                audio_file,
+                caption=f"🎵 {title}",
+                duration=duration,
+                thumb=thumbnail_file,
+                progress=progress_for_pyrogram,
+                progress_args=(progress_msg, "Uploading", time.time())
+            )
+            
+            # Clean up files
+            os.remove(audio_file)
+            if thumbnail_file and os.path.exists(thumbnail_file):
+                os.remove(thumbnail_file)
+        
+        # Delete progress message
+        await progress_msg.delete()
+    
+    except Exception as e:
+        logging.error(f"YouTube download error: {str(e)}")
+        await progress_msg.edit_text(f"❌ **Download failed:** {str(e)}")
+        raise
 
 async def broadcast_handler(client, message: Message):
     """

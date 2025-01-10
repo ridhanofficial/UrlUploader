@@ -52,8 +52,7 @@ YOUTUBE_REGEX = r'(https?://)?(www\.)?(youtube|youtu|youtube-nocookie)\.(com|be)
 THUMB_LOCATION = "./THUMBNAILS"
 
 # Constants
-FORCE_SUB_CHANNEL = "@RSforeverBots"
-MAX_FILE_SIZE = 2000 * 1024 * 1024  # 2000 MiB in bytes
+MAX_FILE_SIZE = 4 * 1024 * 1024 * 1024  # 4GB
 
 async def get_max_file_size(user_id: int) -> int:
     return MAX_FILE_SIZE
@@ -184,6 +183,67 @@ async def async_download_file(url, filename, progress=None, progress_args=None):
             os.remove(filename)
         raise e
 
+async def send_file_with_thumbnail(client, chat_id, document, file_name, caption, progress, progress_args):
+    """Send file with user's thumbnail if available"""
+    thumb = get_thumb(chat_id)
+    start_time = time.time()
+    
+    try:
+        # Delete the progress message from download
+        try:
+            await progress_args[0].delete()
+        except Exception:
+            pass
+        
+        # Send new progress message for upload
+        progress_message = await client.send_message(chat_id, "**🔄 Preparing Upload...**")
+        
+        try:
+            # Use user client for large files
+            file_size = os.path.getsize(document)
+            if file_size > 2 * 1024 * 1024 * 1024:  # If file is larger than 2GB
+                await progress_message.edit("**🔄 File size > 2GB, using user account for upload...**")
+                await user.send_document(
+                    chat_id=chat_id,
+                    document=document,
+                    thumb=thumb,
+                    file_name=file_name,
+                    caption=caption,
+                    progress=progress,
+                    progress_args=(
+                        "📤 Uploading",
+                        progress_message,
+                        start_time
+                    )
+                )
+            else:
+                await client.send_document(
+                    chat_id=chat_id,
+                    document=document,
+                    thumb=thumb,
+                    file_name=file_name,
+                    caption=caption,
+                    progress=progress,
+                    progress_args=(
+                        "📤 Uploading",
+                        progress_message,
+                        start_time
+                    )
+                )
+            # Delete progress message after upload
+            await progress_message.delete()
+        except Exception as e:
+            # If sending fails, show error
+            await progress_message.edit(f"**❌ Upload Failed!**\n\n`{str(e)}`")
+            raise e
+            
+    except Exception as e:
+        try:
+            await progress_message.edit(f"**❌ Upload Failed!**\n\n`{str(e)}`")
+        except Exception:
+            pass
+        raise e
+
 START_TEXT = """
 ✨ **Welcome to URL Uploader Bot** ✨
 
@@ -310,63 +370,6 @@ def TimeFormatter(milliseconds: int) -> str:
     return tmp[:-2]
 
 # Update the download handlers to handle completion properly
-async def send_file_with_thumbnail(client, chat_id, document, file_name, caption, progress, progress_args):
-    """Send file with user's thumbnail if available"""
-    thumb = get_thumb(chat_id)
-    start_time = time.time()
-    
-    try:
-        # Delete the progress message from download
-        try:
-            await progress_args[0].delete()
-        except Exception:
-            pass
-        
-        # Send new progress message for upload
-        progress_message = await client.send_message(chat_id, "**🔄 Preparing Upload...**")
-        
-        try:
-            await client.send_document(
-                chat_id=chat_id,
-                document=document,
-                thumb=thumb,
-                file_name=file_name,
-                caption=caption,
-                progress=progress,
-                progress_args=(
-                    "📤 Uploading",
-                    progress_message,
-                    start_time
-                )
-            )
-            # Delete progress message after upload
-            await progress_message.delete()
-        except Exception as e:
-            # If sending with thumbnail fails, try without it
-            await client.send_document(
-                chat_id=chat_id,
-                document=document,
-                file_name=file_name,
-                caption=caption,
-                progress=progress,
-                progress_args=(
-                    "📤 Uploading",
-                    progress_message,
-                    start_time
-                )
-            )
-            # Delete progress message after upload
-            await progress_message.delete()
-            
-    except Exception as e:
-        try:
-            await progress_message.edit(f"**❌ Upload Failed!**\n\n`{str(e)}`")
-        except Exception:
-            pass
-        raise e
-
-# Update the message handlers
-@bot.on_message(filters.text & filters.private & ~filters.command("start") & ~filters.command("help") & ~filters.command("about"))
 async def handle_message(client, message: Message):
     if not await force_sub(client, message):
         return
@@ -408,7 +411,10 @@ async def handle_message(client, message: Message):
         elif file_size == 0:
             await progress_msg.edit("⚠️ **Couldn't determine file size, attempting download...**")
         else:
-            await progress_msg.edit(f"**🔄 Starting download...**\n\nFile size: {humanbytes(file_size)}")
+            size_info = f"File size: {humanbytes(file_size)}"
+            if file_size > 2 * 1024 * 1024 * 1024:
+                size_info += "\n⚠️ Large file will be uploaded using user account"
+            await progress_msg.edit(f"**🔄 Starting download...**\n\n{size_info}")
         
         # Start download
         filename = await get_filename(url)

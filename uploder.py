@@ -395,9 +395,17 @@ async def about_command(client, message):
 async def save_photo(client, message):
     """Save photo as thumbnail"""
     try:
+        # Ensure the reply is to a photo
+        if not message.reply_to_message or not message.reply_to_message.photo:
+            await message.reply_text("❌ Reply to a photo to set it as thumbnail.")
+            return
+
         # Get the photo file
         photo = message.reply_to_message.photo[-1]
         download_path = os.path.join(THUMB_LOCATION, f"{message.chat.id}_temp.jpg")
+        
+        # Create THUMB_LOCATION directory if it doesn't exist
+        os.makedirs(THUMB_LOCATION, exist_ok=True)
         
         # Download the photo
         await client.download_media(

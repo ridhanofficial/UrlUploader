@@ -300,7 +300,7 @@ async def callback_handler(client, callback_query):
     await callback_query.answer()
 
 # Handle text messages (URLs and rename requests)
-@bot.on_message(filters.text & filters.private & ~filters.command)
+@bot.on_message(filters.text & filters.private & ~filters.command("start") & ~filters.command("help") & ~filters.command("about"))
 async def handle_message(client, message: Message):
     text = message.text.strip()
     

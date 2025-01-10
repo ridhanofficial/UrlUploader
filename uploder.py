@@ -68,10 +68,9 @@ URL_REGEX = r'https?://[^\s<>"]+|www\.[^\s<>"]+'
 YOUTUBE_REGEX = r'(?:https?://)?(?:www\.)?(?:youtube\.com/watch\?v=|youtu\.be/|youtube\.com/shorts/)([a-zA-Z0-9_-]+)'
 
 async def extract_youtube_info(url):
-    """Extract info from YouTube URL"""
     ydl_opts = {
-        'format': 'best',  # Best quality
-        'noplaylist': True,  # Only download single video
+        'format': 'best',
+        'noplaylist': True,
         'quiet': True,
         'no_warnings': True,
     }
@@ -81,41 +80,39 @@ async def extract_youtube_info(url):
             info = ydl.extract_info(url, download=False)
             formats = info.get('formats', [])
             
-            # Get best quality that's under size limit
+            # Get best quality format
             for f in formats:
-                if f.get('filesize', 0) < MAX_FILE_SIZE:
-                    return {
-                        'url': f['url'],
-                        'title': info.get('title', 'video'),
-                        'thumbnail': info.get('thumbnail'),
-                        'duration': info.get('duration'),
-                        'filesize': f.get('filesize', 0)
-                    }
+                return {
+                    'url': f['url'],
+                    'title': info.get('title', 'video'),
+                    'thumbnail': info.get('thumbnail'),
+                    'duration': info.get('duration'),
+                    'filesize': f.get('filesize', 0)
+                }
             
             return None
     except Exception as e:
-        print(f"YouTube extraction error: {str(e)}")
+        logging.error(f"YouTube extraction error: {str(e)}")
         return None
 
 async def process_youtube(client, message, url):
-    """Process YouTube URL"""
     try:
         progress_msg = await message.reply_text("🎥 **Processing YouTube Link...**")
         
         # Extract info
         info = await extract_youtube_info(url)
         if not info:
-            await progress_msg.edit_text("❌ **Failed to process YouTube video**\n\nMake sure the video exists and is not too large.")
+            await progress_msg.edit_text("❌ **Failed to process YouTube video**\n\nMake sure the video exists.")
             return
-            
-        # Check file size
-        if info['filesize'] > MAX_FILE_SIZE:
+        
+        # Check file size (2GB limit)
+        if info['filesize'] > 2 * 1024 * 1024 * 1024:  # 2GB in bytes
             await progress_msg.edit_text(
                 f"❌ **Video size ({humanbytes(info['filesize'])}) is too large!**\n\n"
-                f"Maximum allowed size is 2GB ({humanbytes(MAX_FILE_SIZE)})"
+                "Maximum allowed size is 2GB"
             )
             return
-            
+        
         # Show download options
         keyboard = InlineKeyboardMarkup([
             [
@@ -127,17 +124,19 @@ async def process_youtube(client, message, url):
             ]
         ])
         
+        # Send message with video details
         await progress_msg.edit_text(
-            f"🎥 **YouTube Video Found!**\n\n"
-            f"📝 **Title:** {info['title']}\n"
-            f"⏱ **Duration:** {TimeFormatter(info['duration'] * 1000) if info['duration'] else 'N/A'}\n"
-            f"📦 **Size:** {humanbytes(info['filesize'])}\n\n"
-            "**Choose an option:**",
+            f"**🎥 YouTube Video Detected!**\n\n"
+            f"📹 **Title:** `{info['title']}`\n"
+            f"⏱️ **Duration:** {info['duration']} seconds\n"
+            f"📦 **Size:** {humanbytes(info['filesize'])}\n"
+            f"🎯 **Choose an option:**",
             reply_markup=keyboard
         )
-        
+    
     except Exception as e:
-        await message.reply_text(f"❌ **Error processing YouTube link:**\n\n`{str(e)}`")
+        logging.error(f"YouTube processing error: {str(e)}")
+        await message.reply_text("❌ **Failed to process YouTube video**")
 
 async def get_max_file_size(user_id: int) -> int:
     return MAX_FILE_SIZE
@@ -763,10 +762,20 @@ async def handle_message(client, message):
     if re.match(YOUTUBE_REGEX, text):
         await process_youtube(client, message, text)
     elif re.match(URL_REGEX, text):
+        # Get file size
+        file_size = await get_file_size(text)
+        
+        # Check file size (2GB limit)
+        if file_size > 2 * 1024 * 1024 * 1024:  # 2GB in bytes
+            await message.reply_text(
+                f"❌ **File size ({humanbytes(file_size)}) is too large!**\n\n"
+                "Maximum allowed size is 2GB"
+            )
+            return
+        
         file_id = str(uuid.uuid4())
         pending_downloads[file_id] = text
         
-        file_size = await get_file_size(text)
         original_filename = await get_filename(text) or "File"
         size_text = humanbytes(file_size) if file_size else "Unknown"
         
@@ -820,3 +829,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

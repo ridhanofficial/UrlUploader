@@ -177,7 +177,3 @@ async def process_youtube(client, message, url):
         # Add any remaining buttons
         if current_row:
             video_buttons.append(current_row)
-
-        # ...rest of existing code...
-
-# ...rest of the file remains unchanged...
